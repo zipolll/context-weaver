@@ -13,6 +13,14 @@ describe('graph motion', () => {
     motion.sync([{ ...a, data: { ...a.data, expanded: true } }, b]); run(motion);
     expect(motion.positions().a).toEqual(before.a);
     expect(motion.positions().b!.y).toBeGreaterThan(before.b!.y + 10);
+    motion.settle();
+    expect(motion.savedPositions().b).toEqual(b.position);
+    motion.sync([a, b]); run(motion); motion.settle();
+    expect(Math.abs(motion.positions().b!.y - before.b!.y)).toBeLessThan(1);
+    // A second full cycle must not grow the resting spacing.
+    motion.sync([{ ...a, data: { ...a.data, expanded: true } }, b]); run(motion); motion.settle();
+    motion.sync([a, b]); run(motion); motion.settle();
+    expect(Math.abs(motion.positions().b!.y - before.b!.y)).toBeLessThan(1);
   });
   it('repels overlapping nodes and softly attracts children during a long drag', () => {
     const motion = new GraphMotion(), offset = questionOffset(0, 2);
@@ -28,6 +36,8 @@ describe('graph motion', () => {
     expect(first.x - before.q!.x).toBeLessThan(20);
     run(motion); motion.release(); run(motion);
     expect(motion.positions().q!.x).toBeGreaterThan(before.q!.x + 400);
+    motion.settle();
+    expect(motion.savedPositions().a!.x).toBeCloseTo(before.a!.x + 500, 1);
     for (const p of Object.values(motion.positions())) expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
   });
 });

@@ -210,7 +210,7 @@ function GraphCanvas({ nodes: incoming, edges, onClick, onDoubleClick, onMenu, o
       setNodes(current => current.map(node => positions[node.id] ? { ...node, position: positions[node.id]! } : node));
       if (!motion.current.dragging && (quiet > 10 || ticks > 240 || reduced.current)) {
         motion.current.settle(); frame.current = null;
-        if (dirty.current) { dirty.current = false; commit.current(positions); }
+        if (dirty.current) { dirty.current = false; commit.current(motion.current.savedPositions()); }
       } else frame.current = requestAnimationFrame(tick);
     };
     frame.current = requestAnimationFrame(tick);
@@ -229,8 +229,8 @@ function GraphCanvas({ nodes: incoming, edges, onClick, onDoubleClick, onMenu, o
     clearTimeout(focusTimer.current);
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
-    // Switching graphs during motion still retains the positions reached so far.
-    if (dirty.current) { dirty.current = false; commit.current(motion.current.positions()); }
+    // Persist intentional anchors, never temporary expansion displacement.
+    if (dirty.current) { dirty.current = false; commit.current(motion.current.savedPositions()); }
     };
   }, [animate]);
   return <ReactFlow<CanvasNode> ref={surface} onInit={instance => { flow.current = instance; }} nodes={nodes} edges={edges} nodeTypes={nodeTypes} minZoom={0.15} maxZoom={1.6} autoPanOnNodeDrag={false}

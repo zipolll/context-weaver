@@ -4,8 +4,13 @@ type Body = { id: string; kind: 'conversation' | 'question'; parent: string; pos
 
 /** Stable seeds: adding or expanding a conversation never reflows existing seeds. */
 export function conversationPositions(ids: string[], narrow: boolean): Record<string, Point> {
-  const columns = narrow ? 1 : 3;
-  return Object.fromEntries(ids.map((id, index) => [id, { x: 80 + (index % columns) * 350 + (Math.floor(index / columns) % 2) * 28, y: 100 + Math.floor(index / columns) * 220 }]));
+  const columns = narrow ? 1 : 2;
+  // Compact staggered groups: nearby dots sit ~175–220px apart, while titles
+  // occupy different rows. Appending nodes never rearranges existing seeds.
+  return Object.fromEntries(ids.map((id, index) => {
+    const group = Math.floor(index / 3), row = index % 3;
+    return [id, { x: 80 + (group % columns) * 440 + [120, 0, 180][row]!, y: 100 + Math.floor(group / columns) * 420 + row * 125 }];
+  }));
 }
 
 export function questionOffset(index: number, count: number): Point {
@@ -36,7 +41,7 @@ export class GraphMotion {
       }
       if (old.expanded !== !!node.data.expanded || old.count !== (node.data.questionCount ?? 0)) {
         changed = true;
-        if (old.kind === 'conversation') this.held = old.id;
+        if (old.kind === 'conversation') this.held = node.data.expanded ? old.id : this.dragging;
       }
       if (old.visible !== !node.hidden) {
         changed = true;
@@ -71,7 +76,7 @@ export class GraphMotion {
         if (!body.visible) { body.position = target; body.velocity = { x: 0, y: 0 }; continue; }
         force.x += (target.x - body.position.x) * 0.018; force.y += (target.y - body.position.y) * 0.018;
       } else {
-        force.x += (body.home.x - body.position.x) * 0.002; force.y += (body.home.y - body.position.y) * 0.002;
+        force.x += (body.home.x - body.position.x) * 0.014; force.y += (body.home.y - body.position.y) * 0.014;
       }
     }
     // An expanded conversation reserves breathing room for its question cluster.
@@ -114,10 +119,18 @@ export class GraphMotion {
   settle() {
     this.held = null;
     for (const body of this.bodies.values()) {
-      body.home = { ...body.position }; body.velocity = { x: 0, y: 0 };
-      const parent = this.bodies.get(body.parent);
-      if (body.kind === 'question' && parent) body.offset = { x: body.position.x - parent.position.x, y: body.position.y - parent.position.y };
+      // Expansion/collisions are temporary. Only an explicit drag changes home
+      // or a question's preferred offset; settling must not bake in displacement.
+      body.velocity = { x: 0, y: 0 };
     }
+  }
+
+  savedPositions(): Record<string, Point> {
+    return Object.fromEntries([...this.bodies.values()].map(body => {
+      const parent = this.bodies.get(body.parent);
+      const position = body.kind === 'question' && parent ? { x: parent.home.x + body.offset.x, y: parent.home.y + body.offset.y } : body.home;
+      return [body.id, { x: Math.round(position.x * 100) / 100, y: Math.round(position.y * 100) / 100 }];
+    }));
   }
 
   positions(): Record<string, Point> {
