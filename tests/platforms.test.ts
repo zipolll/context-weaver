@@ -22,7 +22,8 @@ describe('registered platforms',()=>{
     for(const url of ['http://chatgpt.com/c/1','https://chatgpt.com.evil.test','https://example.com'])expect(platformFor(url)).toBeUndefined();
   });
   for(const f of fixtures) it(f.id+' extracts, locates and submits only the confirmed content',()=>{
-    document.body.innerHTML=f.html;const adapter=f.make();const snapshot=adapter.readSnapshot();
+    document.body.innerHTML='<aside><a href="'+f.url+'"><span class="conversation-title">网页侧栏的真实对话标题</span><button title="更多">操作</button></a></aside>'+f.html;const adapter=f.make();const snapshot=adapter.readSnapshot();
+    expect(snapshot.title).toBe('网页侧栏的真实对话标题');
     expect(snapshot.turns).toHaveLength(1);expect(snapshot.turns[0]).toMatchObject({user:'问题一',assistant:'答案一'});
     const anchor=adapter.navigationAnchors()[0]!;anchor.element.scrollIntoView=vi.fn();expect(adapter.locateTurn(anchor.turnId)).toBe(true);expect(anchor.element.scrollIntoView).toHaveBeenCalledOnce();
     const range=document.createRange();range.selectNodeContents(anchor.element);document.getSelection()!.removeAllRanges();document.getSelection()!.addRange(range);expect(adapter.readSelection()).toMatchObject({text:'问题一',turnId:anchor.turnId});

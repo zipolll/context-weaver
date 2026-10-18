@@ -20,15 +20,14 @@ export function Preview({initial,state,currentPage,close,report:reportParent,ref
   useEffect(()=>{if(lastComposed.current===null){lastComposed.current=composed;if(!initial.prompt)setPrompt(composed);}else if(lastComposed.current!==composed){lastComposed.current=composed;setPrompt(composed);setSummary('');}},[composed]);
   useEffect(()=>{request<ApiSettings>({type:'settings.get'}).then(setSettings).catch(e=>report(e.message));return()=>abort.current?.abort();},[]);
   useEffect(()=>{let cancelled=false;if(draft.destination==='current'){setComposerReady(false);request<string>({type:'page.composer',tabId}).then(text=>{if(!cancelled){setPrevious(text);setComposerReady(true);}}).catch(e=>{if(!cancelled)report(e.message);});}else{setPrevious('');setComposerReady(true);}return()=>{cancelled=true;};},[draft.destination,tabId]);
-  async function save(send:boolean){
+  async function send(){
     if(saveLock.current||locked)return;saveLock.current=true;setBusy(true);setLocalError('');setStatus('');
     try{
-      if(send&&draft.destination==='current'){const current=await request<string>({type:'page.composer',tabId});if(current!==previous){setPrevious(current);throw new Error('原页面输入已变化，合并内容已更新，请再次确认。');}}
+      if(draft.destination==='current'){const current=await request<string>({type:'page.composer',tabId});if(current!==previous){setPrevious(current);throw new Error('原页面输入已变化，合并内容已更新，请再次确认。');}}
       const retry=record.status==='failed';
       const next:Draft={...draft,id:retry?uid():draft.id,tabId,destination:draft.destination,targetSite:draft.destination==='current'?currentPage?.site??draft.targetSite:draft.targetSite??currentPage?.site??'deepseek',prompt,sources:sources.map(s=>initial.sources.find(original=>original.id===s.id)??s),editedSources:structuredClone(sources),status:'preview',error:undefined};
       await request({type:'draft.save',draft:next});setDraft(next);
-      if(send){await request({type:'draft.send',id:next.id,mode,tabId:next.tabId,expectedComposer:previous});setStatus('正在发送…');}
-      else setStatus('草稿已保存。');await refresh();
+      await request({type:'draft.send',id:next.id,mode,tabId:next.tabId,expectedComposer:previous});setStatus('正在发送…');await refresh();
     }catch(e){report((e as Error).message);}finally{saveLock.current=false;setBusy(false);}
   }
   async function compress(){if(!settings)return;setCompressing(true);abort.current=new AbortController();try{await ensureApiPermission(settings.endpoint);const text=sources.map((s,i)=>'['+(i+1)+'] '+s.title+'\n'+s.text+'\n来源：'+s.url).join('\n\n');setSummary(await compressContext(settings,text,abort.current.signal));}catch(e){report((e as Error).message);}finally{setCompressing(false);}}
@@ -51,6 +50,6 @@ export function Preview({initial,state,currentPage,close,report:reportParent,ref
         <label>完整提示词<textarea className="prompt-editor" rows={8} value={prompt} onChange={e=>setPrompt(e.target.value)}/></label><button className="text-button" onClick={()=>void navigator.clipboard.writeText(mergedPrompt).then(()=>setStatus('已复制。')).catch(()=>report('复制失败。'))}><Copy size={14}/>复制发送内容</button>
       </fieldset></details>
       {statusText&&<div className={record.status==='failed'||record.status==='uncertain'?'notice':'success'} role="status">{statusText}</div>}
-    </div><footer className="preview-footer"><button disabled={busy||locked} onClick={()=>void save(false)}>保存草稿</button><button className="primary" disabled={busy||locked||!composerReady||!prompt.trim()||(!draft.question.trim()&&!sources.length)} onClick={()=>void save(true)}>{['waiting','submitting'].includes(record.status)||busy?'发送中…':['sent','bound'].includes(record.status)?'已发送':'发送'}</button></footer>
+    </div><footer className="preview-footer"><button className="primary" disabled={busy||locked||!composerReady||!prompt.trim()||(!draft.question.trim()&&!sources.length)} onClick={()=>void send()}>{['waiting','submitting'].includes(record.status)||busy?'发送中…':['sent','bound'].includes(record.status)?'已发送':'发送'}</button></footer>
   </section></div>;
 }

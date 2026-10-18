@@ -12,10 +12,22 @@ export function withWorkspace(input: AppState): AppState {
   if (!s.graphs.length) s.graphs = [newGraph()];
   if (!s.graphs.some(g => g.id === s.activeGraphId)) s.activeGraphId = s.graphs[0]!.id;
   s.questionMeta ??= []; s.staged ??= []; s.tagEntries ??= []; s.openMode ??= 'split';
+  // Earlier side panels could consume one context-menu action concurrently. Keep
+  // the first record when loading old state so that those duplicates disappear.
+  const seenStaged = new Set<string>();
+  s.staged = s.staged.filter(item => {
+    const identity = stagedIdentity(item.source, item.node);
+    if (seenStaged.has(identity)) return false;
+    seenStaged.add(identity);
+    return true;
+  });
   for (const name of new Set([...s.conversations.flatMap(c => c.tags), ...s.questionMeta.flatMap(q => q.tags)])) {
     if (!s.tagEntries.some(t => t.kind === 'tag' && t.name === name)) s.tagEntries.push({ id: uid(), name, kind: 'tag', parentId: null });
   }
   return s;
+}
+function stagedIdentity(source: { url: string; text: string; turnIds: string[] }, node?: NodeRef): string {
+  return JSON.stringify([source.url, source.turnIds.length ? source.turnIds : node?.turnId ? [node.turnId] : [], source.text.replace(/\r\n?/g, '\n').trim()]);
 }
 export function nodeTags(s: AppState, ref: NodeRef): string[] {
   return ref.turnId ? s.questionMeta?.find(q => q.conversationId === ref.conversationId && q.turnId === ref.turnId)?.tags ?? [] : s.conversations.find(c => c.id === ref.conversationId)?.tags ?? [];
@@ -38,7 +50,11 @@ export function workspaceCommand(input: AppState, command: AppCommand): AppState
   switch (command.type) {
     case 'graph.patch': {
       const graph = s.graphs!.find(g => g.id === command.id); if (!graph) throw new Error('图不存在。');
-      const patch = command.patch; return workspaceCommand(s, {type:'graph.save',graph:{...graph,...patch,positions:patch.positions ? {...graph.positions,...patch.positions} : graph.positions}});
+      const patch = command.patch;
+      const updated = workspaceCommand(s, { type: 'graph.save', graph: { ...graph, ...patch, positions: patch.positions ? { ...graph.positions, ...patch.positions } : graph.positions } })!;
+      // A canvas settling after a graph switch must not reactivate the old graph.
+      updated.activeGraphId = s.activeGraphId;
+      return updated;
     }
     case 'graph.save': {
       const g = structuredClone(command.graph);
@@ -82,7 +98,17 @@ export function workspaceCommand(input: AppState, command: AppCommand): AppState
       for (const t of s.tagEntries!) if (removing.has(t.id) && t.kind === 'tag') renameTag(s, t.name, null);
       s.tagEntries = s.tagEntries!.filter(t => !removing.has(t.id)); return s;
     }
-    case 'stage.save': s.staged = [...s.staged!.filter(t => t.id !== command.item.id), structuredClone(command.item)]; return s;
+    case 'stage.save': {
+      const item = structuredClone(command.item);
+      const identity = stagedIdentity(item.source, item.node);
+      const existing = s.staged!.find(entry => stagedIdentity(entry.source, entry.node) === identity);
+      if (existing) {
+        s.staged = s.staged!.map(entry => stagedIdentity(entry.source, entry.node) === identity ? { ...existing, selected: item.id === existing.id ? item.selected : true } : entry);
+        return s;
+      }
+      s.staged = [...s.staged!, item];
+      return s;
+    }
     case 'stage.delete': s.staged = s.staged!.filter(t => t.id !== command.id); return s;
     case 'openMode.save': s.openMode = command.mode; return s;
     default: return null;

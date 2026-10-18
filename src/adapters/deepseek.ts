@@ -1,6 +1,7 @@
 import type { PageSnapshot, SelectionSnapshot, Turn } from '../core/types';
 import type { SiteAdapter } from './types';
 import { buttonFor, candidates, locate, normalizeText } from './dom';
+import { conversationTitle } from './title';
 
 /** Public DOM evidence: NIyueeE/deepseek-user-message-renderer (2026).
  * Current user text: ._9663006 .fbb737a4; final answer: .ds-assistant-message-main-content.
@@ -101,8 +102,7 @@ export class DeepSeekAdapter implements SiteAdapter {
     if (!messageCount || !turns.length) throw new Error('未识别到可读取的对话。请等待页面加载；若仍失败，DeepSeek 页面结构可能已更新。');
     const parsed = new URL(this.url());
     // DeepSeek may virtualize older messages. DOM alone cannot prove completeness.
-    const pageTitle = this.document.title.replace(/\s*[-|·]\s*DeepSeek.*$/i, '').trim();
-    return { site: this.id, externalId, url: parsed.origin + parsed.pathname, title: !pageTitle || /^deepseek$/i.test(pageTitle) ? turns[0]!.user.slice(0, 60) : pageTitle, turns, complete: false };
+    return { site: this.id, externalId, url: parsed.origin + parsed.pathname, title: conversationTitle(this.document, this.url(), turns[0]!.user.slice(0,60)), sourceTitle: conversationTitle(this.document, this.url(), ''), turns, complete: false };
   }
   locateTurn(turnId: string): boolean {
     let element: Element | undefined;

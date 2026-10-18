@@ -2,7 +2,7 @@ import type { PlatformId } from '../adapters/platforms';
 export type ID = string;
 export interface Container { id: ID; kind: 'project' | 'folder'; name: string; parentId: ID | null; order: number; createdAt: number }
 export interface Turn { id: ID; user: string; assistant: string; index: number; fingerprint: string; question?: string }
-export interface Conversation { id: ID; site: string; externalId: string; url: string; title: string; customTitle: boolean; containerId: ID | null; tags: string[]; starred: boolean; archived: boolean; turns: Turn[]; complete: boolean; createdAt: number; updatedAt: number }
+export interface Conversation { id: ID; site: string; externalId: string; url: string; title: string; sourceTitle?: string; customTitle: boolean; containerId: ID | null; tags: string[]; starred: boolean; archived: boolean; turns: Turn[]; complete: boolean; createdAt: number; updatedAt: number }
 export interface SourceSnapshot { id: ID; conversationId: ID | null; title: string; url: string; turnIds: ID[]; text: string; capturedAt: number; turns?: Turn[] }
 export interface Relation { id: ID; targetId: ID; source: SourceSnapshot; createdAt: number }
 export interface Snippet { id: ID; text: string; title: string; url: string; conversationId: ID | null; turnId: ID | null; createdAt: number }
@@ -17,10 +17,10 @@ export interface StagedItem { id: ID; source: SourceSnapshot; node?: NodeRef; se
 export type OpenMode = 'split' | 'tab';
 export interface AppState { version: 1; containers: Container[]; conversations: Conversation[]; relations: Relation[]; snippets: Snippet[]; drafts: Draft[]; templates: PromptTemplate[]; graphs?: KnowledgeGraph[]; activeGraphId?: ID; tagEntries?: TagEntry[]; questionMeta?: QuestionMeta[]; staged?: StagedItem[]; openMode?: OpenMode }
 export interface ApiSettings { endpoint: string; model: string; apiKey: string }
-export interface PageSnapshot { site: string; externalId: string; url: string; title: string; turns: Turn[]; complete: boolean }
+export interface PageSnapshot { site: string; externalId: string; url: string; title: string; sourceTitle?: string; turns: Turn[]; complete: boolean }
 export interface SelectionSnapshot { text: string; title: string; url: string; turnId?: string }
 export interface ActivePage { tabId: number; url: string; title: string; supported: boolean; site?: PlatformId; snapshot?: PageSnapshot; selection?: SelectionSnapshot }
-export interface UiIntent { action: Action | 'snippet'; destination: 'current' | 'new'; selection: SelectionSnapshot; tabId: number; nonce: string }
+export interface UiIntent { action: Action | 'stage'; destination: 'current' | 'new'; selection: SelectionSnapshot; tabId: number; nonce: string }
 export type AppCommand =
   | { type: 'state.get' }
   | { type: 'graph.save'; graph: KnowledgeGraph }
@@ -56,6 +56,7 @@ export type AppCommand =
   | { type: 'backup.import'; data: unknown }
   | { type: 'data.clear' }
   | { type: 'intent.get' }
+  | { type: 'intent.claim' }
   | { type: 'intent.clear'; nonce: string };
 export interface SendResult { status: 'sent' | 'uncertain' | 'failed'; snapshot?: PageSnapshot; turnId?: string; error?: string }
 export type ContentCommand =

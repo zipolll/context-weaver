@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { deleteDB } from 'idb';
 import { applyCommand, bindDraft, captureSnapshot, createInitialState, exportBackup, updateCaptured, validateBackup } from '../src/core/state';
 import { ACTION_LABELS, renderPrompt, snapshotConversation, snapshotSnippet } from '../src/core/context';
+import { withWorkspace } from '../src/core/workspace';
 import { mutateState, readState } from '../src/core/repository';
 import type { AppState, Container, Draft, PageSnapshot, Snippet, SourceSnapshot, Turn } from '../src/core/types';
 
@@ -39,6 +40,9 @@ describe('container and conversation state', () => {
     expect(next.conversations[0]!.turns[2]!.assistant).toBe('Updated answer');
     expect(next.conversations[0]).toMatchObject({ title: 'My title', tags: ['science', 'optics'], starred: true, complete: false });
     expect(customized.conversations[0]!.turns[2]!.assistant).toBe('Answer 2');
+    expect(next.conversations[0]!.sourceTitle).toBe('Site generated title');
+    const noSidebar = updateCaptured(next, page({ title: 'Question 0', sourceTitle: '' }));
+    expect(noSidebar.conversations[0]!.sourceTitle).toBe('Site generated title');
   });
   it('does not automatically collect an untracked page', () => {
     const state = createInitialState(); expect(updateCaptured(state, page())).toBe(state);
@@ -129,5 +133,32 @@ describe('IndexedDB serialized mutations', () => {
     await expect(mutateState(state => { state.containers.push(container('should-not-persist')); throw new Error('reject mutation'); })).rejects.toThrow('reject mutation');
     await mutateState(state => applyCommand(state, { type: 'container.save', container: container('valid') }));
     expect((await readState()).containers.map(c => c.id)).toEqual(['valid']);
+  });
+});
+
+describe('staging duplicate regression', () => {
+  beforeEach(async () => { await deleteDB('context-weaver'); });
+  it('serializes repeated additions and allows unchecking the remaining entry', async () => {
+    await Promise.all(['first', 'second', 'third'].map(id => mutateState(s => applyCommand(s, { type: 'stage.save', item: { id, source: source(), selected: true, createdAt: 1 } }))));
+    const stored = await readState();
+    expect(stored.staged).toHaveLength(1);
+    const item = stored.staged![0]!;
+    const unchecked = applyCommand(stored, { type: 'stage.save', item: { ...item, selected: false } });
+    expect(unchecked.staged![0]!.selected).toBe(false);
+    const selected = applyCommand(unchecked, { type: 'stage.save', item: { ...item, id: 'new-action', selected: true } });
+    expect(selected.staged).toHaveLength(1);
+    expect(selected.staged![0]!.selected).toBe(true);
+  });
+  it('cleans old duplicates without merging different origins, turns or code spacing', () => {
+    const state = createInitialState();
+    const item = { id: 'old', source: source(), selected: false, createdAt: 1 };
+    state.staged = [item, { ...item, id: 'duplicate', source: { ...source(), text: ' Frozen source text\r\n' } },
+      { ...item, id: 'other-url', source: { ...source(), url: 'https://example.com/other' } },
+      { ...item, id: 'other-turn', source: { ...source(), turnIds: ['turn-1'] } },
+      { ...item, id: 'other-spacing', source: { ...source(), text: 'Frozen  source text' } }];
+    const migrated = withWorkspace(state);
+    expect(migrated.staged!.map(entry => entry.id)).toEqual(['old', 'other-url', 'other-turn', 'other-spacing']);
+    expect(migrated.staged![0]!.selected).toBe(false);
+    expect(state.staged).toHaveLength(5);
   });
 });

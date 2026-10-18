@@ -1,6 +1,6 @@
 {
   "name": "context-weaver",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "A local-first Chrome extension for organizing AI conversations and reusing context.",

@@ -2,6 +2,7 @@ import type { PageSnapshot, SelectionSnapshot, Turn } from '../core/types';
 import type { SiteAdapter, ComposerState } from './types';
 import { platformById, platformFor, type PlatformId } from './platforms';
 import { buttonFor, candidates, cleanText, fillInput, fingerprint, locate, normalizeText, readInput, uniqueComposer } from './dom';
+import { conversationTitle } from './title';
 export interface DomConfig { id: PlatformId; user: string; assistant: string; composer: string; send: string; stop: string; conversationId: (url: URL) => string | null }
 export class StructuredAdapter implements SiteAdapter {
   readonly capabilities = { capture: true, navigation: true, composer: true, selection: true, send: true };
@@ -30,7 +31,7 @@ export class StructuredAdapter implements SiteAdapter {
     if (!turns.length) throw new Error('未识别到对话，请等待加载或刷新页面。');
     return { externalId, turns, nodes };
   }
-  readSnapshot(): PageSnapshot { const {externalId, turns} = this.read(); const url = new URL(this.url()); return { site: this.id, externalId, url: url.origin + url.pathname, title: turns[0]!.user.slice(0,60), turns, complete: false }; }
+  readSnapshot(): PageSnapshot { const {externalId, turns} = this.read(); const url = new URL(this.url()); return { site: this.id, externalId, url: url.origin + url.pathname, title: conversationTitle(this.document, this.url(), turns[0]!.user.slice(0,60)), sourceTitle: conversationTitle(this.document, this.url(), ''), turns, complete: false }; }
   navigationAnchors() { const {turns,nodes} = this.read(); return turns.map(t => ({ turnId:t.id,text:t.user,element:nodes.get(t.id)! })); }
   locateTurn(id: string) { try { return locate(this.read().nodes.get(id)); } catch { return false; } }
   private composer() { return uniqueComposer(this.document, this.config.composer); }

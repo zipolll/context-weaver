@@ -8,6 +8,7 @@ import { normalizePrompt, questionFromDraft } from '../src/core/questions';
 import { platformFor, platformById, type PlatformId } from '../src/adapters/platforms';
 export default defineBackground(()=>{
   const inflight=new Set<string>();
+  let intentClaim: Promise<unknown> = Promise.resolve();
   const notify=()=>chrome.runtime.sendMessage({channel:CHANNEL,changed:true}).catch(()=>undefined);
   const trustedPage=(sender:chrome.runtime.MessageSender)=>sender.id===chrome.runtime.id&&sender.url?.startsWith(chrome.runtime.getURL(''));
   const defaultSettings:ApiSettings={endpoint:'https://api.deepseek.com/chat/completions',model:'',apiKey:''};
@@ -75,14 +76,19 @@ export default defineBackground(()=>{
   async function recover(){return mutateState(s=>{for(const d of s.drafts)if(!inflight.has(d.id)&&['waiting','submitting'].includes(d.status)){d.status=d.status==='submitting'?'uncertain':'preview';d.error=d.status==='uncertain'?'发送过程已中断，请检查原页面。不会自动重新发送。':undefined;}return s;});}
   async function install(){
     await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});await chrome.storage.session.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});await chrome.sidePanel.setPanelBehavior({openPanelOnActionClick:true});await recover();
-    await chrome.contextMenus.removeAll();for(const [id,title]of [['current','拾序：在当前对话追问'],['new','拾序：在新对话追问'],['snippet','拾序：加入暂存'],['explain','拾序：解释所选内容'],['example','拾序：举例说明'],['check','拾序：检查所选内容']])chrome.contextMenus.create({id:'cw-'+id,title:title!,contexts:['selection']});
+    await chrome.contextMenus.removeAll();for(const [id,title]of [['current','拾序：在当前对话追问'],['new','拾序：在新对话追问'],['stage','拾序：添加到暂存'],['explain','拾序：解释所选内容'],['example','拾序：举例说明'],['check','拾序：检查所选内容']])chrome.contextMenus.create({id:'cw-'+id,title:title!,contexts:['selection']});
   }
   chrome.runtime.onInstalled.addListener(()=>void install());chrome.runtime.onStartup.addListener(()=>void install());
   chrome.tabs.onActivated.addListener(({tabId})=>{chrome.tabs.get(tabId).then(t=>{if(t.url?.startsWith('http'))return chrome.storage.session.set({lastWebTab:tabId});}).then(notify).catch(()=>undefined);});
   chrome.contextMenus.onClicked.addListener((info,tab)=>{
     if(!String(info.menuItemId).startsWith('cw-')||tab?.id===undefined)return;const tabId=tab.id,key=String(info.menuItemId).slice(3);void chrome.sidePanel.open({tabId}).catch(()=>undefined);
     void(async()=>{let selection:SelectionSnapshot={text:info.selectionText??'',title:tab.title??'选中片段',url:info.pageUrl??tab.url??''};if(platformFor(selection.url))try{const captured=await content<SelectionSnapshot>(tabId,{type:'cw.selection'});if(captured.text.trim()===selection.text.trim())selection=captured;}catch{}
-      safeUrl(selection.url);if(platformFor(selection.url))try{const snapshot=await content<PageSnapshot>(tabId,{type:"cw.snapshot"});await mutateState(s=>captureSnapshot(s,decorate(s,snapshot,tabId)).state);}catch{}const intent:UiIntent={action:['snippet','explain','example','check'].includes(key)?key as UiIntent['action']:'followup',destination:key!=='new'&&!!platformFor(selection.url)?'current':'new',selection,tabId,nonce:uid()};await chrome.storage.session.set({intent,lastWebTab:tabId});notify();})().catch(()=>undefined);
+      safeUrl(selection.url);if(platformFor(selection.url))try{const snapshot=await content<PageSnapshot>(tabId,{type:"cw.snapshot"});await mutateState(s=>captureSnapshot(s,decorate(s,snapshot,tabId)).state);}catch{}
+      if(key==='stage'||key==='snippet'){
+        await mutateState(s=>applyCommand(s,{type:'stage.save',item:{id:uid(),source:{id:uid(),conversationId:s.conversations.find(c=>c.url===selection.url)?.id??null,title:selection.title,url:selection.url,turnIds:selection.turnId?[selection.turnId]:[],text:selection.text,capturedAt:Date.now()},selected:true,createdAt:Date.now()}}));
+        await chrome.storage.session.set({lastWebTab:tabId});notify();return;
+      }
+      const intent:UiIntent={action:['explain','example','check'].includes(key)?key as UiIntent['action']:'followup',destination:key!=='new'&&!!platformFor(selection.url)?'current':'new',selection,tabId,nonce:uid()};await chrome.storage.session.set({intent,lastWebTab:tabId});notify();})().catch(()=>undefined);
   });
   async function handle(command:AppCommand):Promise<unknown>{switch(command.type){
     case 'state.get':return recover();
@@ -123,6 +129,10 @@ export default defineBackground(()=>{
     case 'backup.export':return exportBackup(await readState());
     case 'backup.import':if(inflight.size)throw new Error('请等待当前发送结束后导入备份。');break;
     case 'intent.get':return (await chrome.storage.session.get('intent')).intent??null;
+    case 'intent.claim': {
+      const claim = intentClaim.then(async()=>{const {intent}=await chrome.storage.session.get('intent');if(intent)await chrome.storage.session.remove('intent');return intent??null;});
+      intentClaim=claim.catch(()=>undefined);return claim;
+    }
     case 'intent.clear':{const {intent}=await chrome.storage.session.get('intent');if(intent?.nonce===command.nonce)await chrome.storage.session.remove('intent');return true;}
     case 'data.clear':if(inflight.size)throw new Error('请等待当前发送结束后清空数据。');await chrome.storage.local.remove(['apiSettings','lastPlatform']);await chrome.storage.session.remove(['intent','lastWebTab']);break;
   }const next=await mutateState(s=>applyCommand(s,command));notify();return next;}
