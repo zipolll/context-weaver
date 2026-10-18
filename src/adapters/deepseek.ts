@@ -1,5 +1,6 @@
 import type { PageSnapshot, SelectionSnapshot, Turn } from '../core/types';
 import type { SiteAdapter } from './types';
+import { buttonFor, candidates, locate, normalizeText } from './dom';
 
 /** Public DOM evidence: NIyueeE/deepseek-user-message-renderer (2026).
  * Current user text: ._9663006 .fbb737a4; final answer: .ds-assistant-message-main-content.
@@ -48,8 +49,9 @@ function textContent(element: Element): string {
 }
 interface Message { element: Element; role: 'user' | 'assistant'; text: string }
 export class DeepSeekAdapter implements SiteAdapter {
-  readonly id = 'deepseek';
-  readonly capabilities = { capture: true, navigation: true, composer: true, selection: true };
+  readonly id = 'deepseek' as const;
+  readonly name = 'DeepSeek';
+  readonly capabilities = { capture: true, navigation: true, composer: true, selection: true, send: true };
   constructor(private readonly document: Document = window.document, private readonly url: () => string = () => window.location.href) {}
   detect(url: string): boolean {
     try { const parsed = new URL(url); return parsed.protocol === 'https:' && parsed.hostname === 'chat.deepseek.com'; } catch { return false; }
@@ -106,12 +108,20 @@ export class DeepSeekAdapter implements SiteAdapter {
     let element: Element | undefined;
     try { element = this.turns().nodes.get(turnId); } catch { return false; }
     if (!element) return false;
-    element.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
-    const target = element as HTMLElement;
-    const outline = target.style.outline; const offset = target.style.outlineOffset;
-    target.style.outline = '2px solid #0891b2'; target.style.outlineOffset = '6px';
-    this.document.defaultView?.setTimeout(() => { target.style.outline = outline; target.style.outlineOffset = offset; }, 1700);
-    return true;
+    return locate(element as HTMLElement);
+  }
+  navigationAnchors() { const { turns, nodes } = this.turns(); return turns.map(t => ({ turnId: t.id, text: t.user, element: nodes.get(t.id)! as HTMLElement })); }
+  private sendButton() {
+    return buttonFor(this.document, 'button[data-testid="send-button"], [role="button"][aria-label="发送"], button[aria-label="发送"], button[aria-label="Send"], button[aria-label="Send message"], [role="button"][aria-label="Send"], [role="button"][aria-label="Send message"], button[aria-label="发送消息"], [role="button"][data-testid="send-button"], .ds-icon-button:has(svg path[d^="M8.3125 0.981"]), .ds-icon-button:has(svg path[d^="M8.3125 0.982"])', this.composer());
+  }
+  composerState(): 'ready' | 'generating' | 'unavailable' {
+    if (candidates(this.document, '[aria-label="停止生成"], [aria-label="Stop generating"], [data-testid="stop-button"]').length) return 'generating';
+    try { return this.sendButton() ? 'ready' : 'unavailable'; } catch { return 'unavailable'; }
+  }
+  submitComposer(expected: string) {
+    if (normalizeText(this.readComposer()) !== normalizeText(expected)) throw new Error('输入内容已变化，请重新确认。');
+    if (this.composerState() !== 'ready') throw new Error('发送按钮不可用，请等待回答结束或检查登录状态。');
+    this.sendButton()!.click();
   }
   private composer(): HTMLTextAreaElement | HTMLElement {
     const elements = [...this.document.querySelectorAll<HTMLElement>(DEEPSEEK_SELECTORS.composer)].filter(visible);

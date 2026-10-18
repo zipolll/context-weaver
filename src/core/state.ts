@@ -65,7 +65,7 @@ function mergeTurnHistory(previous: Turn[], incoming: Turn[]): Turn[] {
   const records = new Map(previous.map(t => [t.id, t])); const order = previous.map(t => t.id);
   incoming.forEach((turn, i) => {
     const old = records.get(turn.id);
-    records.set(turn.id, { ...turn, assistant: turn.assistant || old?.assistant || '' });
+    records.set(turn.id, { ...turn, ...(turn.question || old?.question ? {question: turn.question || old?.question} : {}), assistant: turn.assistant || old?.assistant || '' });
     if (order.includes(turn.id)) return;
     const before = incoming.slice(i + 1).find(t => order.includes(t.id));
     const after = incoming.slice(0, i).reverse().find(t => order.includes(t.id));
@@ -77,8 +77,8 @@ function mergeTurnHistory(previous: Turn[], incoming: Turn[]): Turn[] {
 }
 const normalize = (s: string) => s.replace(/\r\n/g, '\n').trim();
 export function bindDraft(input: AppState, id: string, snapshot: PageSnapshot): AppState {
-  const draft = input.drafts.find(d => d.id === id); if (!draft || draft.status !== 'filled' || !snapshot.externalId || normalize(snapshot.turns[0]?.user ?? '') !== normalize(draft.prompt)) return input;
-  const { state: s, conversation } = captureSnapshot(input, snapshot); s.drafts.find(d => d.id === id)!.status = 'bound';
+  const draft = input.drafts.find(d => d.id === id); if (!draft || !['filled', 'submitting', 'sent', 'uncertain'].includes(draft.status) || draft.destination !== 'new' || (draft.targetSite && draft.targetSite !== snapshot.site) || !snapshot.externalId || normalize(snapshot.turns[0]?.user ?? '') !== normalize(draft.prompt)) return input;
+  const { state: s, conversation } = captureSnapshot(input, snapshot); Object.assign(s.drafts.find(d => d.id === id)!, { status: 'bound', sentTurnId: snapshot.turns[0]!.id, targetExternalId: snapshot.externalId });
   for (const source of draft.sources) { if (source.conversationId === conversation.id) continue; s.relations.push({ id: uid(), targetId: conversation.id, source: structuredClone(source), createdAt: Date.now() }); }
   return s;
 }
@@ -97,7 +97,7 @@ function bool(v: unknown): boolean { if (typeof v !== 'boolean') throw new Error
 function arr<T>(v: unknown, parse: (v: unknown) => T, max = 50000): T[] { if (!Array.isArray(v) || v.length > max) throw new Error('备份列表格式或数量无效。'); return v.map(parse); }
 function choice<T extends string>(v: unknown, choices: T[]): T { if (!choices.includes(v as T)) throw new Error('备份包含未知类型。'); return v as T; }
 function source(v: unknown): SourceSnapshot { const o = obj(v); return { id: id(o.id), conversationId: nullable(o.conversationId), title: str(o.title, 500), url: safeUrl(str(o.url)), turnIds: arr(o.turnIds, id), text: str(o.text), capturedAt: num(o.capturedAt), ...(o.turns === undefined ? {} : { turns: arr(o.turns, turn) }) }; }
-function turn(v: unknown): Turn { const o = obj(v); return { id: id(o.id), user: str(o.user), assistant: str(o.assistant), index: num(o.index), fingerprint: str(o.fingerprint, 500) }; }
+function turn(v: unknown): Turn { const o = obj(v); return { id: id(o.id), user: str(o.user), assistant: str(o.assistant), index: num(o.index), fingerprint: str(o.fingerprint, 500), ...(o.question === undefined ? {} : {question: str(o.question)}) }; }
 export function validateBackup(data: unknown): AppState {
   const o = obj(data); if (o.version !== 1) throw new Error('不支持此备份版本。');
   const s: AppState = { version: 1,
@@ -105,7 +105,7 @@ export function validateBackup(data: unknown): AppState {
     conversations: arr(o.conversations, v => { const c = obj(v); return { id: id(c.id), site: str(c.site, 200), externalId: id(c.externalId), url: safeUrl(str(c.url)), title: str(c.title, 500), customTitle: bool(c.customTitle), containerId: nullable(c.containerId), tags: arr(c.tags, v => str(v, 200), 50), starred: bool(c.starred), archived: bool(c.archived), turns: arr(c.turns, turn), complete: bool(c.complete), createdAt: num(c.createdAt), updatedAt: num(c.updatedAt) }; }),
     relations: arr(o.relations, v => { const r = obj(v); return { id: id(r.id), targetId: id(r.targetId), source: source(r.source), createdAt: num(r.createdAt) }; }),
     snippets: arr(o.snippets, v => { const x = obj(v); return { id: id(x.id), text: str(x.text), title: str(x.title, 500), url: safeUrl(str(x.url)), conversationId: nullable(x.conversationId), turnId: nullable(x.turnId), createdAt: num(x.createdAt) }; }),
-    drafts: arr(o.drafts, v => { const d = obj(v); return { id: id(d.id), sources: arr(d.sources, source), ...(d.editedSources === undefined ? {} : { editedSources: arr(d.editedSources, source) }), question: str(d.question), action: choice(d.action, ['followup', 'explain', 'example', 'check']), templateId: id(d.templateId), prompt: str(d.prompt), destination: choice(d.destination, ['current', 'new']), status: choice(d.status, ['preview', 'waiting', 'filled', 'bound', 'failed']), createdAt: num(d.createdAt), ...(d.tabId === undefined ? {} : { tabId: num(d.tabId) }), ...(d.error === undefined ? {} : { error: str(d.error, 1000) }) }; }),
+    drafts: arr(o.drafts, v => { const d = obj(v); return { id: id(d.id), sources: arr(d.sources, source), ...(d.editedSources === undefined ? {} : { editedSources: arr(d.editedSources, source) }), question: str(d.question), action: choice(d.action, ['followup', 'explain', 'example', 'check']), templateId: id(d.templateId), prompt: str(d.prompt), destination: choice(d.destination, ['current', 'new']), status: choice(d.status, ['preview', 'waiting', 'filled', 'submitting', 'sent', 'uncertain', 'bound', 'failed']), ...(d.targetSite === undefined ? {} : { targetSite: choice<'deepseek'|'chatgpt'|'gemini'>(d.targetSite, ['deepseek','chatgpt','gemini']) }), ...(d.sentTurnId === undefined ? {} : {sentTurnId: id(d.sentTurnId)}), ...(d.targetExternalId === undefined ? {} : {targetExternalId: id(d.targetExternalId)}), createdAt: num(d.createdAt), ...(d.tabId === undefined ? {} : { tabId: num(d.tabId) }), ...(d.error === undefined ? {} : { error: str(d.error, 1000) }) }; }),
     templates: arr(o.templates, v => { const t = obj(v); return { id: id(t.id), name: str(t.name, 200), body: str(t.body, 20000), action: choice(t.action, ['followup', 'explain', 'example', 'check']) }; }, 200),
   };
   for (const list of [s.containers, s.conversations, s.relations, s.snippets, s.drafts, s.templates]) if (new Set(list.map(x => x.id)).size !== list.length) throw new Error('备份包含重复标识符。');
