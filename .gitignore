@@ -1,0 +1,12 @@
+node_modules/
+.wxt/
+.output/
+test-results/
+playwright-report/
+coverage/
+.env
+.env.*
+*.log
+*.tsbuildinfo
+.DS_Store
+artifacts/
