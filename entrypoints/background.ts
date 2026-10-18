@@ -1,3 +1,4 @@
+import { openPage } from '../src/core/navigation';
 import { defineBackground } from 'wxt/utils/define-background';
 import { CHANNEL, type ActivePage, type ApiSettings, type AppCommand, type ContentCommand, type Draft, type PageSnapshot, type Reply, type SelectionSnapshot, type UiIntent, type SendResult, type AppState } from '../src/core/types';
 import { mutateState, readState } from '../src/core/repository';
@@ -74,26 +75,32 @@ export default defineBackground(()=>{
   async function recover(){return mutateState(s=>{for(const d of s.drafts)if(!inflight.has(d.id)&&['waiting','submitting'].includes(d.status)){d.status=d.status==='submitting'?'uncertain':'preview';d.error=d.status==='uncertain'?'发送过程已中断，请检查原页面。不会自动重新发送。':undefined;}return s;});}
   async function install(){
     await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});await chrome.storage.session.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});await chrome.sidePanel.setPanelBehavior({openPanelOnActionClick:true});await recover();
-    await chrome.contextMenus.removeAll();for(const [id,title]of [['current','拾序：在当前对话追问'],['new','拾序：在新对话追问'],['snippet','拾序：收藏片段'],['explain','拾序：解释所选内容'],['example','拾序：举例说明'],['check','拾序：检查所选内容']])chrome.contextMenus.create({id:'cw-'+id,title:title!,contexts:['selection']});
+    await chrome.contextMenus.removeAll();for(const [id,title]of [['current','拾序：在当前对话追问'],['new','拾序：在新对话追问'],['snippet','拾序：加入暂存'],['explain','拾序：解释所选内容'],['example','拾序：举例说明'],['check','拾序：检查所选内容']])chrome.contextMenus.create({id:'cw-'+id,title:title!,contexts:['selection']});
   }
   chrome.runtime.onInstalled.addListener(()=>void install());chrome.runtime.onStartup.addListener(()=>void install());
   chrome.tabs.onActivated.addListener(({tabId})=>{chrome.tabs.get(tabId).then(t=>{if(t.url?.startsWith('http'))return chrome.storage.session.set({lastWebTab:tabId});}).then(notify).catch(()=>undefined);});
   chrome.contextMenus.onClicked.addListener((info,tab)=>{
     if(!String(info.menuItemId).startsWith('cw-')||tab?.id===undefined)return;const tabId=tab.id,key=String(info.menuItemId).slice(3);void chrome.sidePanel.open({tabId}).catch(()=>undefined);
     void(async()=>{let selection:SelectionSnapshot={text:info.selectionText??'',title:tab.title??'选中片段',url:info.pageUrl??tab.url??''};if(platformFor(selection.url))try{const captured=await content<SelectionSnapshot>(tabId,{type:'cw.selection'});if(captured.text.trim()===selection.text.trim())selection=captured;}catch{}
-      safeUrl(selection.url);const intent:UiIntent={action:['snippet','explain','example','check'].includes(key)?key as UiIntent['action']:'followup',destination:key!=='new'&&!!platformFor(selection.url)?'current':'new',selection,tabId,nonce:uid()};await chrome.storage.session.set({intent,lastWebTab:tabId});notify();})().catch(()=>undefined);
+      safeUrl(selection.url);if(platformFor(selection.url))try{const snapshot=await content<PageSnapshot>(tabId,{type:"cw.snapshot"});await mutateState(s=>captureSnapshot(s,decorate(s,snapshot,tabId)).state);}catch{}const intent:UiIntent={action:['snippet','explain','example','check'].includes(key)?key as UiIntent['action']:'followup',destination:key!=='new'&&!!platformFor(selection.url)?'current':'new',selection,tabId,nonce:uid()};await chrome.storage.session.set({intent,lastWebTab:tabId});notify();})().catch(()=>undefined);
   });
   async function handle(command:AppCommand):Promise<unknown>{switch(command.type){
     case 'state.get':return recover();
     case 'page.active':return active();
     case 'page.composer':{const tab=await targetTab(command.tabId);return content(tab.id!,{type:'cw.composer'});}
     case 'page.locate':{const tab=await targetTab(command.tabId);if(!await content(tab.id!,{type:'cw.locate',turnId:command.turnId}))throw new Error('该问题尚未加载，请先在原页面加载历史。');return true;}
-    case 'page.open':return chrome.tabs.create({url:safeUrl(command.url)});
+    case 'page.open': {
+      const current=await readState(); const blocked=current.drafts.filter(d=>inflight.has(d.id)&&d.tabId!==undefined).map(d=>d.tabId!);
+      let anchor:number|undefined;try{anchor=(await targetTab()).id;}catch{}
+      const result=await openPage(safeUrl(command.url),command.mode??current.openMode??'split',anchor,blocked);
+      if(command.turnId&&result.tab.id!==undefined){let found=false;for(let i=0;i<25;i++){try{if(await content(result.tab.id,{type:'cw.locate',turnId:command.turnId})){found=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,400));}if(!found)result.notice='已打开对话；该问题尚未加载，请先在原页面加载历史，再双击问题定位。';}
+      return result;
+    }
     case 'platform.last':return (await chrome.storage.local.get('lastPlatform')).lastPlatform??'deepseek';
     case 'conversation.capture':{
       const tab=await targetTab(command.tabId);if(!tab.id||!tab.url)throw new Error('无法读取当前页面。');let snapshot:PageSnapshot;
       if(platformFor(tab.url)){snapshot=await content(tab.id,{type:'cw.snapshot'});}else snapshot={site:new URL(tab.url).hostname,externalId:tab.url,url:tab.url,title:tab.title??'网页',turns:[],complete:false};
-      const next=await mutateState(s=>captureSnapshot(s,decorate(s,snapshot,tab.id),command.containerId).state);notify();return next;
+      const next=await mutateState(s=>{const captured=captureSnapshot(s,decorate(s,snapshot,tab.id),command.containerId);const graph=captured.state.graphs?.find(g=>g.id===captured.state.activeGraphId);if(graph&&!graph.conversationIds.includes(captured.conversation.id)){graph.conversationIds.push(captured.conversation.id);graph.updatedAt=Date.now();}return captured.state;});notify();return next;
     }
     case 'draft.save':{const previous=(await readState()).drafts.find(d=>d.id===command.draft.id);if(previous&&(['waiting','submitting','sent','bound','uncertain'].includes(previous.status)||inflight.has(previous.id)))throw new Error('此消息已提交或正在处理，请查看原页面。');break;}
     case 'draft.send':{
@@ -104,7 +111,7 @@ export default defineBackground(()=>{
         if(!['preview','failed','filled'].includes(draft.status))throw new Error('此消息已提交或正在处理，请查看原页面，避免重复发送。');if(!draft.prompt.trim())throw new Error('请输入问题。');
         accepted=true;
         let tab:chrome.tabs.Tab;let targetSite:PlatformId;
-        if(draft.destination==='new'){targetSite=platformById(draft.targetSite).id;tab=await chrome.tabs.create({url:'about:blank'});}
+        if(draft.destination==='new'){targetSite=platformById(draft.targetSite).id;const current=await readState();let anchor:number|undefined;try{anchor=(await targetTab(draft.tabId)).id;}catch{}const blocked=current.drafts.filter(d=>d.id!==draft.id&&inflight.has(d.id)&&d.tabId!==undefined).map(d=>d.tabId!);tab=(await openPage('about:blank',draft.openMode??current.openMode??'split',anchor,blocked)).tab;}
         else{tab=await targetTab(command.tabId??draft.tabId);const p=platformFor(tab.url);if(!p)throw new Error('请打开受支持的 AI 对话页面。');targetSite=p.id;}
         await mark(draft.id,{tabId:tab.id,targetSite,status:'waiting',error:undefined});await chrome.storage.local.set({lastPlatform:targetSite});
         if(draft.destination==='new')await chrome.tabs.update(tab.id!,{url:platformById(targetSite).newUrl});

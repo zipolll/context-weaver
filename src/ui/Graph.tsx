@@ -1,127 +1,54 @@
-import { useMemo } from 'react';
-import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, type Edge, type Node, type NodeProps } from '@xyflow/react';
-import { Archive, GitBranch, Link2, MousePointer2 } from 'lucide-react';
-import type { AppState } from '../core/types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Background, Controls, Handle, MarkerType, Position, ReactFlow, type Edge, type Node, type NodeProps } from '@xyflow/react';
+import { ChevronDown, ChevronRight, FolderOpen, GitFork, Inbox, Network, Plus, Search, X } from 'lucide-react';
+import type { ActivePage, AppCommand, AppState, Conversation, KnowledgeGraph, NodeRef, SourceSnapshot } from '../core/types';
+import { nodeKey, nodeTags, withWorkspace } from '../core/workspace';
+import { snapshotConversation, uid } from '../core/context';
+import { questionTitle } from '../core/questions';
+import { platformName } from '../adapters/platforms';
+import { GraphNavigation } from './GraphNavigation';
 import '@xyflow/react/dist/style.css';
 import './graph.css';
 
-interface GraphProps {
-  state: AppState;
-  selected: string[];
-  onToggle: (id: string) => void;
-  onBranch: (ids: string[]) => void;
+type Props={state:AppState;page:ActivePage|null;run:(c:AppCommand)=>Promise<unknown>;onBranch:(sources:SourceSnapshot[])=>void};
+type Data={ref:NodeRef;title:string;kind:'conversation'|'question';subtitle:string;tags:string[];expanded?:boolean;toggle:()=>void;stage:()=>void;create?:()=>void};
+type KNode=Node<Data,'knowledge'>;
+function Card({data,selected}:NodeProps<KNode>){
+ return <div className={'knowledge-node '+data.kind+(selected?' selected':'')}><Handle type="target" position={Position.Top} isConnectable={false}/><div className="node-kind">{data.kind==='conversation'?'对话':'问题'}<span>{data.subtitle}</span></div><strong title={data.title}>{data.title}</strong>{data.tags.length>0&&<div className="node-tags">{data.tags.map(t=>'#'+t).join(' ')}</div>}<div className="node-tools nodrag nopan" onDoubleClick={e=>e.stopPropagation()}>{data.kind==='conversation'&&<button title={data.expanded?'收起问题':'展开问题'} onClick={e=>{e.stopPropagation();data.toggle();}}>{data.expanded?<ChevronDown size={14}/>:<ChevronRight size={14}/>}问题</button>}<button title="加入暂存" onClick={e=>{e.stopPropagation();data.stage();}}><Inbox size={14}/></button>{data.create&&<button title="新建后续对话" onClick={e=>{e.stopPropagation();data.create!();}}><Plus size={14}/></button>}</div>{data.kind==='conversation'&&<Handle type="source" position={Position.Bottom} isConnectable={false}/>}</div>;
 }
-type ConversationData = {
-  title: string;
-  subtitle: string;
-  url: string;
-  archived: boolean;
-  ghost: boolean;
-  onKeySelect: (id: string, additive: boolean) => void;
-};
-type ConversationNode = Node<ConversationData, 'conversation'>;
-
-function safeSourceUrl(url: string): string | undefined {
-  try { const parsed = new URL(url); return ['https:', 'http:'].includes(parsed.protocol) ? parsed.href : undefined; } catch { return undefined; }
+const nodeTypes={knowledge:Card};
+function positions(state:AppState,graph:KnowledgeGraph){
+ const ids=graph.conversationIds, depths=new Map(ids.map(id=>[id,0])), links=state.relations.filter(r=>r.source.conversationId&&ids.includes(r.source.conversationId)&&ids.includes(r.targetId));
+ // Bound the layout for legacy imported cycles; no recursive graph traversal.
+ for(let i=0;i<ids.length;i++){let changed=false;for(const r of links){const d=Math.min(ids.length,(depths.get(r.source.conversationId!)??0)+1);if(d>(depths.get(r.targetId)??0)){depths.set(r.targetId,d);changed=true;}}if(!changed)break;}
+ const levels=new Map<number,string[]>();for(const id of ids){const d=depths.get(id)??0;levels.set(d,[...(levels.get(d)??[]),id]);}
+ const result:Record<string,{x:number;y:number}>={};const columns=window.innerWidth<760?1:3;let y=25;for(const [,row]of [...levels].sort((a,b)=>a[0]-b[0])){for(let offset=0;offset<row.length;offset+=columns){const group=row.slice(offset,offset+columns);group.forEach((id,i)=>result[id]={x:i*290+20,y});y+=210+Math.max(0,...group.filter(id=>graph.expanded.includes(id)).map(id=>(state.conversations.find(c=>c.id===id)?.turns.length??0)*138));}}return result;
 }
-
-function ConversationCard({ id, data, selected }: NodeProps<ConversationNode>) {
-  const href = safeSourceUrl(data.url);
-  return <div className={'cw-graph-node' + (selected ? ' is-selected' : '') + (data.archived ? ' is-archived' : '') + (data.ghost ? ' is-ghost' : '')}
-    role={data.ghost ? 'group' : 'button'} tabIndex={data.ghost ? -1 : 0}
-    aria-label={data.title + (data.ghost ? '，来源已移除' : selected ? '，已选择' : '，未选择')}
-    aria-pressed={data.ghost ? undefined : selected}
-    onKeyDown={event => {
-      if (!data.ghost && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); data.onKeySelect(id, event.ctrlKey || event.metaKey || event.shiftKey); }
-    }}>
-    <Handle type="target" position={Position.Top} isConnectable={false} />
-    <div className="cw-graph-node-label"><span className="cw-graph-node-dot" />{data.ghost ? '来源已移除' : data.archived ? <><Archive size={11} /> 已归档</> : '对话'}</div>
-    <div className="cw-graph-node-title" title={data.title}>{data.title}</div>
-    <div className="cw-graph-node-subtitle">{data.subtitle}</div>
-    {data.ghost && href && <a className="cw-graph-source-link nodrag nopan" href={href} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()} title={href}><Link2 size={11} />打开原始链接</a>}
-    <Handle type="source" position={Position.Bottom} isConnectable={false} />
-  </div>;
+export function Graph({state:raw,page,run,onBranch}:Props){
+ const state=useMemo(()=>withWorkspace(raw),[raw]), graph=state.graphs!.find(g=>g.id===state.activeGraphId)!;
+ const [selected,setSelected]=useState<NodeRef|null>(null),[tree,setTree]=useState(()=>window.innerWidth>=760),[drawer,setDrawer]=useState(false),[picker,setPicker]=useState(false),[query,setQuery]=useState(''),[chosen,setChosen]=useState<string[]>([]),[dragging,setDragging]=useState<Record<string,{x:number;y:number}>>({});
+ const click=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
+ useEffect(()=>{setSelected(null);setDragging({});return()=>clearTimeout(click.current);},[graph.id]);
+ const convs=graph.conversationIds.map(id=>state.conversations.find(c=>c.id===id)).filter((c):c is Conversation=>!!c);
+ const save=(c:AppCommand)=>void run(c), patch=(p:Partial<KnowledgeGraph>)=>save({type:'graph.patch',id:graph.id,patch:p});
+ const toggle=(id:string)=>patch({expanded:graph.expanded.includes(id)?graph.expanded.filter(x=>x!==id):[...graph.expanded,id]});
+ const open=(ref:NodeRef)=>{const c=state.conversations.find(c=>c.id===ref.conversationId);if(c)save({type:'page.open',url:c.url,turnId:ref.turnId,mode:state.openMode});};
+ const stage=(ref:NodeRef)=>{const c=state.conversations.find(c=>c.id===ref.conversationId);if(!c)return;let source=snapshotConversation(c,ref.turnId);if(ref.turnId){const turn=c.turns.find(t=>t.id===ref.turnId)!;source={...source,title:questionTitle(turn.user,turn.question),turnIds:[turn.id],turns:[structuredClone(turn)],text:'用户：'+turn.user+'\n助手：'+turn.assistant};}save({type:'stage.save',item:{id:uid(),source,node:ref,selected:true,createdAt:Date.now()}});};
+ const {nodes,edges}=useMemo(()=>{const base=positions(state,graph),nodes:KNode[]=[],edges:Edge[]=[];
+ for(const c of convs){const expanded=graph.expanded.includes(c.id),ref={conversationId:c.id},pos=dragging[c.id]??graph.positions[c.id]??base[c.id]!;nodes.push({id:c.id,type:'knowledge',position:pos,data:{ref,kind:'conversation',title:c.title||'未命名对话',subtitle:platformName(c.site)+' · '+c.turns.length+' 问',tags:nodeTags(state,ref),expanded,toggle:()=>toggle(c.id),stage:()=>stage(ref),create:()=>onBranch([snapshotConversation(c)])},selected:selected?.conversationId===c.id&&!selected.turnId});if(expanded)c.turns.forEach((t,j)=>{const ref={conversationId:c.id,turnId:t.id},id=nodeKey(ref);nodes.push({id,type:'knowledge',position:dragging[id]??graph.positions[id]??{x:pos.x+25,y:pos.y+160+j*138},data:{ref,kind:'question',title:questionTitle(t.user,t.question),subtitle:'第 '+(j+1)+' 问',tags:nodeTags(state,ref),toggle:()=>{},stage:()=>stage(ref)},selected:nodeKey(selected??{conversationId:''})===id});edges.push({id:'question-'+id,source:c.id,target:id,type:'smoothstep',style:{stroke:'#b9c1d9',strokeWidth:1.2},selectable:false});});}
+ const connected=new Set<string>();for(const r of state.relations){const from=r.source.conversationId,key=from+'>'+r.targetId;if(from&&graph.conversationIds.includes(from)&&graph.conversationIds.includes(r.targetId)&&!connected.has(key)){connected.add(key);edges.push({id:'inherit-'+r.id,source:from,target:r.targetId,type:'smoothstep',markerEnd:{type:MarkerType.ArrowClosed,color:'#7485d7'},style:{stroke:'#7485d7',strokeWidth:1.6},label:'继承',labelStyle:{fontSize:10,fill:'#7485d7'},selectable:false});}}
+ return {nodes,edges};},[state,graph,selected,dragging]);
+ const details=selected&&state.conversations.find(c=>c.id===selected.conversationId),staged=state.staged!.filter(x=>x.selected);
+ return <section className={'knowledge-workspace '+(tree?'tree-open':'')} aria-label="知识图工作区">
+ {tree&&<GraphNavigation state={state} run={run} close={()=>setTree(false)}/>}
+ <div className="knowledge-main"><header className="knowledge-header"><div className="graph-title-row"><button className="icon" aria-label={tree?'收起文库目录':'展开文库目录'} onClick={()=>setTree(!tree)}><FolderOpen size={19}/></button><div><EditableTitle key={graph.id} name={graph.name} save={name=>patch({name})}/><span>{convs.length} 个对话 · {convs.reduce((n,c)=>n+c.turns.length,0)} 个问题</span></div></div><div className="graph-actions"><select aria-label="打开方式" value={state.openMode} onChange={e=>save({type:'openMode.save',mode:e.target.value as 'split'|'tab'})}><option value="split">分栏打开</option><option value="tab">新标签页</option></select><details className="more-menu"><summary aria-label="添加节点"><Plus size={18}/></summary><div className="menu-popover"><button disabled={!page} onClick={()=>save({type:'conversation.capture',tabId:page?.tabId})}>收纳当前对话到图</button><button onClick={()=>{setPicker(true);setChosen([]);}}>从对话库添加</button><button onClick={()=>onBranch([])}>新建对话节点</button></div></details></div></header>
+ <div className="knowledge-canvas">{!convs.length?<div className="graph-empty"><Network size={34}/><h2>从一段对话开始</h2><p>收纳当前对话，或从对话库加入节点。</p><button disabled={!page} onClick={()=>save({type:'conversation.capture',tabId:page?.tabId})}>收纳当前对话</button><button className="text-button" onClick={()=>setPicker(true)}>从对话库添加</button></div>:<ReactFlow<KNode> key={graph.id} nodes={nodes} edges={edges} nodeTypes={nodeTypes} fitView={window.innerWidth>=760} defaultViewport={{x:24,y:20,zoom:.95}} fitViewOptions={{padding:.2,minZoom:.75,maxZoom:1}} minZoom={.15} maxZoom={1.6} nodesDraggable nodesConnectable={false} elementsSelectable={false} zoomOnDoubleClick={false} onNodesChange={changes=>{if(!changes.some(c=>c.type==='position'&&c.position))return;setDragging(prev=>{const next={...prev};for(const c of changes)if(c.type==='position'&&c.position)next[c.id]=c.position;return next;});}} onNodeDragStop={(_,n)=>patch({positions:{[n.id]:n.position}})} onNodeClick={(event,n)=>{if((event.target as HTMLElement).closest('button'))return;clearTimeout(click.current);click.current=setTimeout(()=>{setSelected(n.data.ref);if(n.data.kind==='conversation')toggle(n.id);},230);}} onNodeDoubleClick={(_,n)=>{clearTimeout(click.current);setSelected(n.data.ref);open(n.data.ref);}} onPaneClick={()=>setSelected(null)} proOptions={{hideAttribution:true}}><Background color="#d8dbe5" gap={22} size={1}/><Controls showInteractive={false} position="bottom-right"/></ReactFlow>}</div>
+ {details&&selected&&<NodeDetail key={nodeKey(selected)} conversation={details} node={selected} state={state} run={run} stage={()=>stage(selected)} close={()=>setSelected(null)}/>}
+ <footer className="graph-footer"><button className="stage-button" onClick={()=>setDrawer(!drawer)}><Inbox size={17}/>暂存 <span>{state.staged!.length}</span></button><small>单击展开 · 双击打开 · 拖动排列</small></footer>
+ </div>
+ {drawer&&<section className="stage-drawer" aria-label="暂存内容"><header><strong>暂存</strong><button className="icon" aria-label="关闭暂存" onClick={()=>setDrawer(false)}><X size={16}/></button></header><div className="stage-items">{!state.staged!.length?<p>选中节点或右键选中文字，加入暂存。</p>:state.staged!.map(item=><div className="stage-item" key={item.id}><label><input type="checkbox" checked={item.selected} onChange={e=>save({type:'stage.save',item:{...item,selected:e.target.checked}})}/><span><strong>{item.source.title}</strong><small>{item.source.text.slice(0,120)}</small></span></label><button className="icon" title="移除暂存" onClick={()=>save({type:'stage.delete',id:item.id})}><X size={14}/></button></div>)}</div><button className="primary" disabled={!staged.length} onClick={()=>{setDrawer(false);onBranch(staged.map(x=>x.source));}}><GitFork size={15}/>用所选内容新建对话</button></section>}
+ {picker&&<div className="modal-backdrop"><section className="graph-manager" role="dialog" aria-label="从对话库添加"><header><h2>添加对话节点</h2><button className="icon" onClick={()=>setPicker(false)}><X size={17}/></button></header><label className="graph-search"><Search size={14}/><input autoFocus placeholder="搜索对话" value={query} onChange={e=>setQuery(e.target.value)}/></label><div className="picker-items">{state.conversations.filter(c=>!graph.conversationIds.includes(c.id)&&(!query||c.title.toLowerCase().includes(query.toLowerCase()))).map(c=><label key={c.id}><input type="checkbox" checked={chosen.includes(c.id)} onChange={e=>setChosen(e.target.checked?[...chosen,c.id]:chosen.filter(id=>id!==c.id))}/>{c.title}</label>)}</div><footer><button className="primary" disabled={!chosen.length} onClick={()=>void run({type:'graph.add',id:graph.id,conversationIds:chosen}).then(result=>{if(result!==undefined)setPicker(false);})}>添加 {chosen.length} 个节点</button></footer></section></div>}
+ </section>;
 }
-const nodeTypes = { conversation: ConversationCard };
-
-function graphLayout(state: AppState): { records: Map<string, Omit<ConversationData, 'onKeySelect'>>; positions: Map<string, { x: number; y: number }>; edges: Edge[] } {
-  const conversations = new Map(state.conversations.map(conversation => [conversation.id, conversation]));
-  const records = new Map<string, Omit<ConversationData, 'onKeySelect'>>();
-  for (const conversation of state.conversations) records.set(conversation.id, {
-    title: conversation.title || '未命名对话', subtitle: conversation.site + ' · ' + conversation.turns.length + ' 轮', url: conversation.url, archived: conversation.archived, ghost: false,
-  });
-  const relationLinks = state.relations.filter(relation => conversations.has(relation.targetId)).map(relation => {
-    let sourceId = relation.source.conversationId;
-    if (!sourceId || !conversations.has(sourceId)) {
-      sourceId = 'source-snapshot:' + relation.source.id;
-      records.set(sourceId, { title: relation.source.title || '已移除的来源', subtitle: '保留创建分支时的文本快照', url: relation.source.url, archived: false, ghost: true });
-    }
-    return { relation, sourceId, targetId: relation.targetId };
-  });
-  const parents = new Map<string, Set<string>>();
-  const children = new Map<string, Set<string>>();
-  const depth = new Map<string, number>();
-  for (const id of records.keys()) { parents.set(id, new Set()); children.set(id, new Set()); depth.set(id, 0); }
-  for (const link of relationLinks) {
-    if (link.sourceId === link.targetId) continue;
-    parents.get(link.targetId)!.add(link.sourceId); children.get(link.sourceId)!.add(link.targetId);
-  }
-  const pending = new Map([...parents].map(([id, ids]) => [id, ids.size]));
-  const queue = [...records.keys()].filter(id => pending.get(id) === 0);
-  const visited = new Set<string>();
-  for (let index = 0; index < queue.length; index++) {
-    const id = queue[index]!; visited.add(id);
-    for (const target of children.get(id)!) {
-      depth.set(target, Math.max(depth.get(target)!, depth.get(id)! + 1));
-      pending.set(target, pending.get(target)! - 1);
-      if (pending.get(target) === 0) queue.push(target);
-    }
-  }
-  // Imported legacy cycles remain visible without making the layout recurse forever.
-  const lastDepth = Math.max(0, ...depth.values());
-  for (const id of records.keys()) if (!visited.has(id)) depth.set(id, lastDepth + 1);
-  const levels = new Map<number, string[]>();
-  for (const id of records.keys()) { const level = depth.get(id)!; const row = levels.get(level) ?? []; row.push(id); levels.set(level, row); }
-  const widest = Math.max(1, ...[...levels.values()].map(level => level.length));
-  const positions = new Map<string, { x: number; y: number }>();
-  for (const [level, ids] of levels) ids.forEach((id, index) => positions.set(id, { x: (index + (widest - ids.length) / 2) * 264, y: level * 224 }));
-  const edges: Edge[] = relationLinks.map(({ relation, sourceId, targetId }) => ({
-    id: relation.id, source: sourceId, target: targetId, type: 'smoothstep',
-    label: (parents.get(targetId)?.size ?? 0) > 1 ? '汇合' : '分支',
-    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#738d98' },
-    style: { stroke: '#8ba3ad', strokeWidth: 1.5, strokeDasharray: records.get(sourceId)?.ghost ? '5 4' : undefined },
-    labelStyle: { fill: '#62747c', fontSize: 11 }, labelBgStyle: { fill: '#f7fafb', fillOpacity: 0.96 }, labelBgPadding: [6, 4],
-    selectable: false,
-  }));
-  return { records, positions, edges };
-}
-
-export function Graph({ state, selected, onToggle, onBranch }: GraphProps) {
-  const layout = useMemo(() => graphLayout(state), [state.conversations, state.relations]);
-  const selectedIds = selected.filter(id => state.conversations.some(conversation => conversation.id === id));
-  const select = (id: string, additive: boolean) => {
-    if (layout.records.get(id)?.ghost) return;
-    if (additive) { onToggle(id); return; }
-    for (const current of selectedIds) if (current !== id) onToggle(current);
-    if (!selectedIds.includes(id)) onToggle(id);
-  };
-  const nodes: ConversationNode[] = [...layout.records].map(([id, data]) => ({
-    id, type: 'conversation', data: { ...data, onKeySelect: select }, position: layout.positions.get(id)!, selected: !data.ghost && selectedIds.includes(id),
-    draggable: false, connectable: false, selectable: !data.ghost, focusable: false, ariaLabel: data.title,
-  }));
-  if (!state.conversations.length) return <div className="cw-graph cw-graph-empty"><GitBranch size={32} strokeWidth={1.4} /><h3>从一段对话开始</h3><p>收纳对话后，在这里查看来源关系。选择多个节点，可以合并上下文开启新对话。</p></div>;
-  return <section className="cw-graph" aria-label="对话来源关系图">
-    <div className="cw-graph-toolbar"><span><GitBranch size={15} />{state.conversations.length} 个对话<span className="cw-graph-selection-count">已选 {selectedIds.length}</span></span><button type="button" disabled={!selectedIds.length} onClick={() => onBranch(selectedIds)}>从所选节点新建</button></div>
-    <div className="cw-graph-canvas">
-      <ReactFlow<ConversationNode> nodes={nodes} edges={layout.edges} nodeTypes={nodeTypes} fitView fitViewOptions={{ padding: 0.2, minZoom: 0.25, maxZoom: 1 }} minZoom={0.12} maxZoom={1.8}
-        nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} zoomOnDoubleClick={false} preventScrolling
-        onNodeClick={(event, node) => select(node.id, event.ctrlKey || event.metaKey || event.shiftKey)}
-        proOptions={{ hideAttribution: true }}>
-        <Background color="#d5e0e5" gap={20} size={1} />
-        <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap position="bottom-right" pannable zoomable nodeColor={node => node.selected ? '#0891b2' : node.data.ghost ? '#dce1e5' : '#a7bdc5'} />
-      </ReactFlow>
-    </div>
-    <p className="cw-graph-help"><MousePointer2 size={12} />Ctrl / ⌘ + 点击多选 · 拖动空白处平移 · 来源箭头指向新对话</p>
-  </section>;
-}
+function EditableTitle({name,save}:{name:string;save:(name:string)=>void}){const[value,setValue]=useState(name);useEffect(()=>setValue(name),[name]);return <input aria-label="知识图名称" maxLength={200} value={value} onChange={e=>setValue(e.target.value)} onBlur={()=>{if(value.trim()&&value.trim()!==name)save(value.trim());else setValue(name);}} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur();if(e.key==='Escape'){setValue(name);e.currentTarget.blur();}}}/>;}
+function NodeDetail({conversation:c,node,state,run,stage,close}:{conversation:Conversation;node:NodeRef;state:AppState;run:Props['run'];stage:()=>void;close:()=>void}){const turn=node.turnId?c.turns.find(t=>t.id===node.turnId):undefined,[tags,setTags]=useState(nodeTags(state,node).join(', '));useEffect(()=>setTags(nodeTags(state,node).join(', ')),[state,node.conversationId,node.turnId]);return <aside className="node-detail"><header><small>{turn?'问题节点':'对话节点'}</small><button className="icon" aria-label="关闭节点详情" onClick={close}><X size={15}/></button></header><strong>{turn?questionTitle(turn.user,turn.question):c.title}</strong><p className="node-summary">{(turn?.assistant??c.turns.at(-1)?.assistant??'暂未收纳回答文本').slice(0,260)}</p><div className="node-source">来源：{c.title}<a href={c.url} onClick={e=>{e.preventDefault();void run({type:'page.open',url:c.url,turnId:node.turnId,mode:state.openMode});}}>{platformName(c.site)} · {new URL(c.url).hostname}</a></div><form onSubmit={e=>{e.preventDefault();void run({type:'node.tags',node,tags:tags.split(/[,，]/)});}}><label>Tag<input aria-label="节点 Tag" value={tags} onChange={e=>setTags(e.target.value)} placeholder="以逗号分隔" list="known-tags"/></label><datalist id="known-tags">{state.tagEntries?.filter(t=>t.kind==='tag').map(t=><option value={t.name} key={t.id}/>)}</datalist><button type="submit">保存 Tag</button><button type="button" onClick={stage}><Inbox size={14}/>加入暂存</button></form></aside>;}
