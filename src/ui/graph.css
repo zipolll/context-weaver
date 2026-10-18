@@ -5,17 +5,17 @@
 
 /* Quiet, title-only conversation nodes; question content appears on hover. */
 .canvas-node{position:relative;display:flex;align-items:center;gap:10px;cursor:pointer;color:#40404a}
-.conversation-node{width:224px;height:32px;padding:4px}
-.canvas-node .react-flow__handle{left:12px;top:16px;width:1px;height:1px;opacity:0;border:0;transform:translate(-50%,-50%)}
-.canvas-dot{display:block;flex-shrink:0;width:16px;height:16px;border:2px solid #656570;border-radius:50%;background:#fafbfe;transition:background .12s,border-color .12s}
+.conversation-node{width:264px;height:40px;padding:6px 5px}
+.canvas-node .react-flow__handle{left:12px;top:20px;width:1px;height:1px;opacity:0;border:0;transform:translate(-50%,-50%)}
+.canvas-dot{display:block;flex-shrink:0;width:14px;height:14px;border:1.8px solid #626c7e;border-radius:50%;background:#fafbfe;transition:background .12s,border-color .12s}
 .conversation-node:hover .canvas-dot,.conversation-node.expanded .canvas-dot{border-color:#7966c9;background:#ece8fa}
 .conversation-node.selected .canvas-dot{border-color:#7966c9;background:#7966c9;box-shadow:0 0 0 4px #7966c91c}
-.canvas-label{font-size:12px;font-weight:500;line-height:1.5;white-space:nowrap}
-.question-node{width:24px;height:24px;justify-content:center}
-.question-node .react-flow__handle{top:12px}
-.question-node .canvas-dot{width:10px;height:10px;border:1px solid #bf843b;background:#e6ad58}
+.canvas-label{font-size:15px;font-weight:500;line-height:1.6;white-space:nowrap;color:#30394a;background:#fafbfe;padding:1px 3px;border-radius:3px;letter-spacing:.1px}
+.question-node{width:28px;height:28px;justify-content:center}
+.question-node .react-flow__handle{left:14px;top:14px}
+.question-node .canvas-dot{width:9px;height:9px;border:1px solid #b27a33;background:#e6ad58}
 .question-node:hover .canvas-dot,.question-node.selected .canvas-dot{box-shadow:0 0 0 4px #bf843b24}
-.question-tooltip{position:fixed;z-index:200;width:280px;max-width:calc(100vw - 16px);max-height:180px;overflow:hidden;padding:10px 12px;border:1px solid #dedbea;border-radius:6px;background:#fff;color:#484651;font:12px/1.65 system-ui,"Microsoft YaHei",sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 8px 24px #24243418;pointer-events:none}
+.question-tooltip{position:fixed;z-index:200;width:300px;box-sizing:border-box;max-width:calc(100vw - 24px);max-height:240px;overflow:hidden;padding:12px 14px;border:1px solid #dedbea;border-radius:6px;background:#fff;color:#484651;font:14px/1.7 system-ui,"Microsoft YaHei",sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 8px 24px #24243418;pointer-events:none}
 .node-context-menu{position:fixed;z-index:100;display:flex;flex-direction:column;width:180px;padding:5px;background:#fff;border:1px solid #e0dfea;border-radius:8px;box-shadow:0 8px 28px #24243418}
 .node-context-menu button{justify-content:flex-start;border:0;background:transparent;padding:8px 10px;font-size:12px;color:#484651}
 .node-context-menu button:hover{background:#f0edf8;color:#725db6}

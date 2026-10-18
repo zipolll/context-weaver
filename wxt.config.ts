@@ -5,7 +5,7 @@ export default defineConfig({
   manifest: {
     name: '拾序 · Context Weaver',
     description: '在原来的 AI 页面整理对话、定位轮次、串联来源与复用上下文。',
-    version: '0.3.1',
+    version: '0.3.2',
     minimum_chrome_version: '116',
     permissions: ['storage', 'sidePanel', 'contextMenus', 'activeTab', 'scripting'],
     host_permissions: PLATFORM_MATCHES,

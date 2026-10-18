@@ -5,7 +5,7 @@ type Body = { id: string; kind: 'conversation' | 'question'; parent: string; pos
 /** Stable seeds: adding or expanding a conversation never reflows existing seeds. */
 export function conversationPositions(ids: string[], narrow: boolean): Record<string, Point> {
   const columns = narrow ? 1 : 3;
-  return Object.fromEntries(ids.map((id, index) => [id, { x: 80 + (index % columns) * 330 + (Math.floor(index / columns) % 2) * 28, y: 100 + Math.floor(index / columns) * 220 }]));
+  return Object.fromEntries(ids.map((id, index) => [id, { x: 80 + (index % columns) * 350 + (Math.floor(index / columns) % 2) * 28, y: 100 + Math.floor(index / columns) * 220 }]));
 }
 
 export function questionOffset(index: number, count: number): Point {
@@ -77,7 +77,7 @@ export class GraphMotion {
     // An expanded conversation reserves breathing room for its question cluster.
     const bounds = (body: Body, cluster: boolean) => {
       const radius = cluster && body.expanded ? Math.min(250, 150 + Math.floor(Math.max(0, body.count - 1) / 9) * 52) : 0;
-      const width = body.kind === 'conversation' ? 224 : 24, height = body.kind === 'conversation' ? 32 : 24;
+      const width = body.kind === 'conversation' ? 264 : 28, height = body.kind === 'conversation' ? 40 : 28;
       return { x: body.position.x + (width - radius) / 2, y: body.position.y + height / 2, width: width + radius, height: height + radius * 2 };
     };
     for (let i = 0; i < visible.length; i++) for (let j = i + 1; j < visible.length; j++) {
