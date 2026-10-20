@@ -1,4 +1,5 @@
-import type { PageSnapshot, SelectionSnapshot, Turn } from '../core/types';
+import type { PageSnapshot, SelectionSnapshot, Turn, TurnLocation } from '../core/types';
+import { findLocatedTurn } from '../core/turnLocation';
 import type { SiteAdapter } from './types';
 import { buttonFor, candidates, locate, normalizeText } from './dom';
 import { conversationTitle } from './title';
@@ -104,11 +105,15 @@ export class DeepSeekAdapter implements SiteAdapter {
     // DeepSeek may virtualize older messages. DOM alone cannot prove completeness.
     return { site: this.id, externalId, url: parsed.origin + parsed.pathname, title: conversationTitle(this.document, this.url(), turns[0]!.user.slice(0,60)), sourceTitle: conversationTitle(this.document, this.url(), ''), turns, complete: false };
   }
-  locateTurn(turnId: string): boolean {
+  locateTurn(turnId: string, location?: TurnLocation, behavior?: ScrollBehavior): boolean {
     let element: Element | undefined;
-    try { element = this.turns().nodes.get(turnId); } catch { return false; }
+    try {
+      if (location && (location.site !== this.id || location.externalId !== deepseekConversationId(this.url()))) return false;
+      const { turns, nodes } = this.turns(), turn = findLocatedTurn(turns, turnId, location);
+      element = turn ? nodes.get(turn.id) : undefined;
+    } catch { return false; }
     if (!element) return false;
-    return locate(element as HTMLElement);
+    return locate(element as HTMLElement, behavior);
   }
   navigationAnchors() { const { turns, nodes } = this.turns(); return turns.map(t => ({ turnId: t.id, text: t.user, element: nodes.get(t.id)! as HTMLElement })); }
   private sendButton() {

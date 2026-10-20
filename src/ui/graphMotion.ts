@@ -1,30 +1,97 @@
-export type Point = { x: number; y: number };
-export type MotionNode = { id: string; position: Point; hidden?: boolean; data: { kind: 'conversation' | 'question'; ref: { conversationId: string }; expanded?: boolean; questionCount?: number } };
-type Body = { id: string; kind: 'conversation' | 'question'; parent: string; position: Point; home: Point; offset: Point; velocity: Point; visible: boolean; expanded: boolean; count: number };
+import type { Conversation, KnowledgeGraph } from '../core/types';
+import { GRAPH_LAYOUT_VERSION, nodeKey } from '../core/workspace';
 
-/** Stable seeds: adding or expanding a conversation never reflows existing seeds. */
-export function conversationPositions(ids: string[], narrow: boolean): Record<string, Point> {
-  const columns = narrow ? 1 : 2;
-  // Compact staggered groups: nearby dots sit ~175–220px apart, while titles
-  // occupy different rows. Appending nodes never rearranges existing seeds.
-  return Object.fromEntries(ids.map((id, index) => {
-    const group = Math.floor(index / 3), row = index % 3;
-    return [id, { x: 80 + (group % columns) * 440 + [120, 0, 180][row]!, y: 100 + Math.floor(group / columns) * 420 + row * 125 }];
-  }));
+export type Point = { x: number; y: number };
+export type CanvasSize = { width: number; height: number };
+export type MotionLink = { source: string; target: string };
+export type MotionNode = { id: string; position: Point; hidden?: boolean; data: { kind: 'conversation' | 'question'; ref: { conversationId: string }; expanded?: boolean; labelWidth?: number } };
+type Body = { id: string; kind: 'conversation' | 'question'; parent: string; position: Point; home: Point; offset: Point; velocity: Point; visible: boolean; expanded: boolean; labelWidth: number };
+const rounded = (p: Point): Point => ({ x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100 });
+
+export function labelWidth(title: string): number {
+  return Math.min(104, Math.max(24, Array.from(title).reduce((width, char) => width + (/[^\u0000-\u00ff]/.test(char) ? 13 : 7), 0)));
+}
+
+/** Deterministic, relation-aware seeds. Existing anchors stay fixed when adding nodes. */
+export function conversationPositions(ids: string[], size: CanvasSize, links: MotionLink[] = [], anchors: Record<string, Point> = {}, widths: Record<string, number> = {}): Record<string, Point> {
+  if (ids.every(id => anchors[id])) return Object.fromEntries(ids.map(id => [id, { ...anchors[id]! }]));
+  const aspect = Math.max(0.45, Math.min(1.65, size.width / Math.max(1, size.height))), stretch = Math.sqrt(aspect);
+  const nodes = ids.map((id, i) => {
+    const angle = i * Math.PI * (3 - Math.sqrt(5)), radius = i ? 78 * Math.sqrt(i) : 0;
+    return { id, x: anchors[id]?.x ?? Math.cos(angle) * radius * stretch, y: anchors[id]?.y ?? Math.sin(angle) * radius / stretch, vx: 0, vy: 0 };
+  });
+  const byId = new Map(nodes.map(node => [node.id, node])), unique = new Set<string>();
+  const springs = links.filter(link => {
+    const key = JSON.stringify([link.source, link.target].sort());
+    if (link.source === link.target || !byId.has(link.source) || !byId.has(link.target) || unique.has(key)) return false;
+    unique.add(key); return true;
+  });
+  const fixed = nodes.filter(node => anchors[node.id]);
+  const center = fixed.length ? { x: fixed.reduce((n, p) => n + p.x, 0) / fixed.length, y: fixed.reduce((n, p) => n + p.y, 0) / fixed.length } : { x: 0, y: 0 };
+  for (const node of nodes) {
+    if (anchors[node.id]) continue;
+    const parents = springs.flatMap(link => link.source === node.id ? [byId.get(link.target)!] : link.target === node.id ? [byId.get(link.source)!] : []).filter(parent => anchors[parent.id]);
+    if (parents.length) { node.x += parents.reduce((n, p) => n + p.x, 0) / parents.length; node.y += parents.reduce((n, p) => n + p.y, 0) / parents.length; }
+    else { node.x += center.x; node.y += center.y; }
+  }
+  for (let tick = 0; tick < 240; tick++) {
+    const forces = new Map(nodes.map(node => [node.id, { x: (center.x - node.x) * 0.009 / aspect, y: (center.y - node.y) * 0.009 * aspect }]));
+    for (const link of springs) {
+      const a = byId.get(link.source)!, b = byId.get(link.target)!;
+      const dx = b.x - a.x, dy = b.y - a.y, distance = Math.hypot(dx, dy) || 1, force = (distance - 120) * 0.075;
+      const af = forces.get(a.id)!, bf = forces.get(b.id)!;
+      af.x += dx / distance * force; af.y += dy / distance * force;
+      bf.x -= dx / distance * force; bf.y -= dy / distance * force;
+    }
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i]!, b = nodes[j]!;
+      let dx = a.x - b.x, dy = a.y - b.y, distance = Math.hypot(dx, dy);
+      if (distance < 0.01) { dx = Math.cos(j * 2.4); dy = Math.sin(j * 2.4); distance = 1; }
+      const push = Math.max(0, 115 - distance) * 0.13;
+      let fx = dx / distance * push, fy = dy / distance * push;
+      const ox = ((widths[a.id] ?? 104) + (widths[b.id] ?? 104)) / 2 + 10 - Math.abs(dx), oy = 62 - Math.abs(dy);
+      if (ox > 0 && oy > 0) {
+        if (oy < ox) fy += Math.sign(dy || 1) * oy * 0.3;
+        else fx += Math.sign(dx || 1) * ox * 0.3;
+      }
+      const af = forces.get(a.id)!, bf = forces.get(b.id)!;
+      af.x += fx; af.y += fy; bf.x -= fx; bf.y -= fy;
+    }
+    for (const node of nodes) {
+      if (anchors[node.id]) continue;
+      const force = forces.get(node.id)!;
+      node.vx = (node.vx + force.x) * 0.65; node.vy = (node.vy + force.y) * 0.65;
+      const speed = Math.hypot(node.vx, node.vy), scale = speed > 8 ? 8 / speed : 1;
+      node.x += node.vx * scale; node.y += node.vy * scale;
+    }
+  }
+  return Object.fromEntries(nodes.map(node => [node.id, anchors[node.id] ? { ...anchors[node.id]! } : rounded(node)]));
 }
 
 export function questionOffset(index: number, count: number): Point {
-  const ring = Math.floor(index / 9), number = Math.min(9, count - ring * 9);
-  // Leave a gap on the right for the conversation's title.
-  const angle = number === 1 ? Math.PI / 2 : Math.PI / 3 + (index % 9) * (Math.PI * 4 / 3) / (number - 1);
-  const radius = 96 + ring * 52;
-  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius + 4 };
+  const ring = Math.floor(index / 10), number = Math.min(10, count - ring * 10);
+  // The open sector below the parent keeps its short title readable.
+  const angle = number === 1 ? -Math.PI / 2 : Math.PI * 0.85 + (index % 10) * (Math.PI * 1.3) / Math.max(1, number - 1);
+  const radius = 56 + ring * 24;
+  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
 }
 
-/** Local, bounded spring simulation. It never changes the viewport or writes storage. */
+/** Ignore legacy positions once; current positions and intentional drags are anchors. */
+export function graphPositions(graph: KnowledgeGraph, conversations: Conversation[], size: CanvasSize, links: MotionLink[]): Record<string, Point> {
+  const current = graph.layoutVersion === GRAPH_LAYOUT_VERSION;
+  const positions = conversationPositions(conversations.map(c => c.id), size, links, current ? graph.positions : {}, Object.fromEntries(conversations.map(c => [c.id, labelWidth(c.sourceTitle || c.title)])));
+  for (const conversation of conversations) conversation.turns.forEach((turn, index) => {
+    const id = nodeKey({ conversationId: conversation.id, turnId: turn.id }), offset = questionOffset(index, conversation.turns.length), parent = positions[conversation.id]!;
+    positions[id] = current && graph.positions[id] ? { ...graph.positions[id]! } : { x: parent.x + offset.x, y: parent.y + offset.y };
+  });
+  return positions;
+}
+
+/** Bounded local springs. Temporary displacement never changes saved anchors. */
 export class GraphMotion {
   bodies = new Map<string, Body>();
   dragging: string | null = null;
+  labelsVisible = true;
   private held: string | null = null;
 
   sync(nodes: MotionNode[]): boolean {
@@ -35,11 +102,10 @@ export class GraphMotion {
     for (const node of nodes) {
       const old = this.bodies.get(node.id), parent = inputs.get(node.data.ref.conversationId);
       if (!old) {
-        this.bodies.set(node.id, { id: node.id, kind: node.data.kind, parent: node.data.ref.conversationId, position: { ...node.position }, home: { ...node.position }, offset: { x: node.position.x - (parent?.position.x ?? 0), y: node.position.y - (parent?.position.y ?? 0) }, velocity: { x: 0, y: 0 }, visible: !node.hidden, expanded: !!node.data.expanded, count: node.data.questionCount ?? 0 });
-        changed = true;
-        continue;
+        this.bodies.set(node.id, { id: node.id, kind: node.data.kind, parent: node.data.ref.conversationId, position: { ...node.position }, home: { ...node.position }, offset: { x: node.position.x - (parent?.position.x ?? 0), y: node.position.y - (parent?.position.y ?? 0) }, velocity: { x: 0, y: 0 }, visible: !node.hidden, expanded: !!node.data.expanded, labelWidth: node.data.labelWidth ?? 104 });
+        changed = true; continue;
       }
-      if (old.expanded !== !!node.data.expanded || old.count !== (node.data.questionCount ?? 0)) {
+      if (old.expanded !== !!node.data.expanded) {
         changed = true;
         if (old.kind === 'conversation') this.held = node.data.expanded ? old.id : this.dragging;
       }
@@ -51,7 +117,7 @@ export class GraphMotion {
           old.velocity = { x: 0, y: 0 };
         }
       }
-      old.visible = !node.hidden; old.expanded = !!node.data.expanded; old.count = node.data.questionCount ?? 0;
+      old.visible = !node.hidden; old.expanded = !!node.data.expanded; old.labelWidth = node.data.labelWidth ?? 104;
     }
     return changed;
   }
@@ -63,7 +129,7 @@ export class GraphMotion {
     if (body.kind === 'question' && parent) body.offset = { x: position.x - parent.position.x, y: position.y - parent.position.y };
   }
 
-  release() { this.dragging = null; }
+  release() { this.dragging = null; this.held = null; }
 
   step(): number {
     const bodies = [...this.bodies.values()], visible = bodies.filter(body => body.visible);
@@ -74,31 +140,33 @@ export class GraphMotion {
       if (body.kind === 'question' && parent) {
         const target = { x: parent.position.x + body.offset.x, y: parent.position.y + body.offset.y };
         if (!body.visible) { body.position = target; body.velocity = { x: 0, y: 0 }; continue; }
-        force.x += (target.x - body.position.x) * 0.018; force.y += (target.y - body.position.y) * 0.018;
+        force.x += (target.x - body.position.x) * 0.085; force.y += (target.y - body.position.y) * 0.085;
       } else {
-        force.x += (body.home.x - body.position.x) * 0.014; force.y += (body.home.y - body.position.y) * 0.014;
+        force.x += (body.home.x - body.position.x) * 0.12; force.y += (body.home.y - body.position.y) * 0.12;
       }
     }
-    // An expanded conversation reserves breathing room for its question cluster.
-    const bounds = (body: Body, cluster: boolean) => {
-      const radius = cluster && body.expanded ? Math.min(250, 150 + Math.floor(Math.max(0, body.count - 1) / 9) * 52) : 0;
-      const width = body.kind === 'conversation' ? 264 : 28, height = body.kind === 'conversation' ? 40 : 28;
-      return { x: body.position.x + (width - radius) / 2, y: body.position.y + height / 2, width: width + radius, height: height + radius * 2 };
-    };
+    const label = (body: Body) => ({ x: body.position.x + 14, y: body.position.y + 41, width: body.labelWidth, height: 20 });
     for (let i = 0; i < visible.length; i++) for (let j = i + 1; j < visible.length; j++) {
       const a = visible[i]!, b = visible[j]!;
-      const bothConversations = a.kind === 'conversation' && b.kind === 'conversation';
-      const ab = bounds(a, bothConversations), bb = bounds(b, bothConversations);
-      const gapX = bothConversations ? 48 : 20, gapY = bothConversations ? 56 : 24;
-      const rx = (ab.width + bb.width) / 2 + gapX, ry = (ab.height + bb.height) / 2 + gapY;
-      let dx = ab.x - bb.x, dy = ab.y - bb.y;
-      if (Math.abs(dx) > rx || Math.abs(dy) > ry) continue;
-      // A soft rectangular collision also protects long labels, including corners.
-      const overlapX = rx - Math.abs(dx), overlapY = ry - Math.abs(dy);
-      if (Math.abs(dx) + Math.abs(dy) < 0.01) dy = i % 2 ? 1 : -1;
-      const vertical = overlapY < overlapX;
-      const push = Math.min(12, (vertical ? overlapY : overlapX) * 0.13);
-      const fx = vertical ? 0 : Math.sign(dx || 1) * push, fy = vertical ? Math.sign(dy || 1) * push : 0;
+      let dx = a.position.x - b.position.x, dy = a.position.y - b.position.y, distance = Math.hypot(dx, dy);
+      if (distance < 0.01) { dx = Math.cos(j * 2.4); dy = Math.sin(j * 2.4); distance = 1; }
+      const minimum = a.kind === 'conversation' && b.kind === 'conversation' ? 42 : 30;
+      const push = Math.max(0, minimum - distance) * 0.65;
+      let fx = dx / distance * push, fy = dy / distance * push;
+      if (this.labelsVisible) {
+        const dotA = { x: a.position.x + 14, y: a.position.y + 14, width: 22, height: 22 }, dotB = { x: b.position.x + 14, y: b.position.y + 14, width: 22, height: 22 };
+        const repel = (ab: typeof dotA, bb: typeof dotA) => {
+          const lx = ab.x - bb.x, ly = ab.y - bb.y;
+          const ox = (ab.width + bb.width) / 2 + 6 - Math.abs(lx), oy = (ab.height + bb.height) / 2 + 6 - Math.abs(ly);
+          if (ox > 0 && oy > 0) {
+            if (oy < ox) fy += Math.sign(ly || dy || 1) * oy * 0.5;
+            else fx += Math.sign(lx || dx || 1) * ox * 0.5;
+          }
+        };
+        if (a.kind === 'conversation') repel(label(a), dotB);
+        if (b.kind === 'conversation') repel(dotA, label(b));
+        if (a.kind === 'conversation' && b.kind === 'conversation') repel(label(a), label(b));
+      }
       const af = forces.get(a.id)!, bf = forces.get(b.id)!;
       if (!isFixed(a)) { af.x += fx; af.y += fy; }
       if (!isFixed(b)) { bf.x -= fx; bf.y -= fy; }
@@ -107,8 +175,8 @@ export class GraphMotion {
     for (const body of bodies) {
       if (!body.visible || isFixed(body)) continue;
       const force = forces.get(body.id)!;
-      body.velocity.x = (body.velocity.x + force.x) * 0.76; body.velocity.y = (body.velocity.y + force.y) * 0.76;
-      const length = Math.hypot(body.velocity.x, body.velocity.y), limit = 10;
+      body.velocity.x = (body.velocity.x + force.x) * 0.58; body.velocity.y = (body.velocity.y + force.y) * 0.58;
+      const length = Math.hypot(body.velocity.x, body.velocity.y), limit = this.dragging ? 18 : 10;
       if (length > limit) { body.velocity.x *= limit / length; body.velocity.y *= limit / length; }
       body.position.x += body.velocity.x; body.position.y += body.velocity.y;
       speed = Math.max(speed, Math.hypot(body.velocity.x, body.velocity.y));
@@ -118,22 +186,18 @@ export class GraphMotion {
 
   settle() {
     this.held = null;
-    for (const body of this.bodies.values()) {
-      // Expansion/collisions are temporary. Only an explicit drag changes home
-      // or a question's preferred offset; settling must not bake in displacement.
-      body.velocity = { x: 0, y: 0 };
-    }
+    for (const body of this.bodies.values()) body.velocity = { x: 0, y: 0 };
   }
 
   savedPositions(): Record<string, Point> {
     return Object.fromEntries([...this.bodies.values()].map(body => {
       const parent = this.bodies.get(body.parent);
       const position = body.kind === 'question' && parent ? { x: parent.home.x + body.offset.x, y: parent.home.y + body.offset.y } : body.home;
-      return [body.id, { x: Math.round(position.x * 100) / 100, y: Math.round(position.y * 100) / 100 }];
+      return [body.id, rounded(position)];
     }));
   }
 
   positions(): Record<string, Point> {
-    return Object.fromEntries([...this.bodies.values()].map(body => [body.id, { x: Math.round(body.position.x * 100) / 100, y: Math.round(body.position.y * 100) / 100 }]));
+    return Object.fromEntries([...this.bodies.values()].map(body => [body.id, rounded(body.position)]));
   }
 }

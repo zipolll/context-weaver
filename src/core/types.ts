@@ -1,8 +1,10 @@
 import type { PlatformId } from '../adapters/platforms';
 export type ID = string;
 export interface Container { id: ID; kind: 'project' | 'folder'; name: string; parentId: ID | null; order: number; createdAt: number }
-export interface Turn { id: ID; user: string; assistant: string; index: number; fingerprint: string; question?: string }
-export interface Conversation { id: ID; site: string; externalId: string; url: string; title: string; sourceTitle?: string; customTitle: boolean; containerId: ID | null; tags: string[]; starred: boolean; archived: boolean; turns: Turn[]; complete: boolean; createdAt: number; updatedAt: number }
+export interface Turn { id: ID; aliases?: ID[]; user: string; assistant: string; index: number; fingerprint: string; question?: string }
+export interface TurnLocation { site: string; externalId: string; user: string; index: number; total: number; occurrence: number; occurrences: number; before?: string; after?: string; aliases?: ID[]; answerFingerprint?: string; answerOccurrences?: number }
+export type TurnNavigationStatus = 'found' | 'pending' | 'ambiguous' | 'missing' | 'wrong-page';
+export interface Conversation { id: ID; site: string; externalId: string; url: string; title: string; sourceTitle?: string; customTitle: boolean; containerId: ID | null; tags: string[]; primaryTagId?: ID; starred: boolean; archived: boolean; turns: Turn[]; complete: boolean; createdAt: number; updatedAt: number }
 export interface SourceSnapshot { id: ID; conversationId: ID | null; title: string; url: string; turnIds: ID[]; text: string; capturedAt: number; turns?: Turn[] }
 export interface Relation { id: ID; targetId: ID; source: SourceSnapshot; createdAt: number }
 export interface Snippet { id: ID; text: string; title: string; url: string; conversationId: ID | null; turnId: ID | null; createdAt: number }
@@ -10,9 +12,9 @@ export type Action = 'followup' | 'explain' | 'example' | 'check';
 export interface PromptTemplate { id: ID; name: string; body: string; action: Action }
 export interface Draft { graphId?: ID; openMode?: OpenMode; id: ID; sources: SourceSnapshot[]; editedSources?: SourceSnapshot[]; question: string; action: Action; templateId: ID; prompt: string; destination: 'current' | 'new'; targetSite?: PlatformId; tabId?: number; status: 'preview' | 'waiting' | 'filled' | 'submitting' | 'sent' | 'uncertain' | 'bound' | 'failed'; createdAt: number; error?: string; sentTurnId?: string; targetExternalId?: string }
 export interface NodeRef { conversationId: ID; turnId?: ID }
-export interface KnowledgeGraph { id: ID; name: string; folderId: ID | null; conversationIds: ID[]; positions: Record<string, { x: number; y: number }>; expanded: ID[]; createdAt: number; updatedAt: number }
-export interface TagEntry { id: ID; name: string; kind: 'folder' | 'tag'; parentId: ID | null }
-export interface QuestionMeta extends NodeRef { turnId: ID; tags: string[] }
+export interface KnowledgeGraph { id: ID; name: string; folderId: ID | null; conversationIds: ID[]; positions: Record<string, { x: number; y: number }>; layoutVersion?: number; expanded: ID[]; createdAt: number; updatedAt: number }
+export interface TagEntry { id: ID; name: string; kind: 'folder' | 'tag'; parentId: ID | null; color?: string }
+export interface QuestionMeta extends NodeRef { turnId: ID; tags: string[]; primaryTagId?: ID }
 export interface StagedItem { id: ID; source: SourceSnapshot; node?: NodeRef; selected: boolean; createdAt: number }
 export type OpenMode = 'split' | 'tab';
 export interface AppState { version: 1; containers: Container[]; conversations: Conversation[]; relations: Relation[]; snippets: Snippet[]; drafts: Draft[]; templates: PromptTemplate[]; graphs?: KnowledgeGraph[]; activeGraphId?: ID; tagEntries?: TagEntry[]; questionMeta?: QuestionMeta[]; staged?: StagedItem[]; openMode?: OpenMode }
@@ -25,10 +27,10 @@ export type AppCommand =
   | { type: 'state.get' }
   | { type: 'graph.save'; graph: KnowledgeGraph }
   | { type: 'graph.activate'; id: ID }
-  | { type: 'graph.patch'; id: ID; patch: Partial<Pick<KnowledgeGraph, 'name' | 'folderId' | 'expanded' | 'positions' | 'conversationIds'>> }
+  | { type: 'graph.patch'; id: ID; patch: Partial<Pick<KnowledgeGraph, 'name' | 'folderId' | 'expanded' | 'positions' | 'conversationIds' | 'layoutVersion'>> }
   | { type: 'graph.delete'; id: ID }
   | { type: 'graph.add'; id: ID; conversationIds: ID[] }
-  | { type: 'node.tags'; node: NodeRef; tags: string[] }
+  | { type: 'node.tags'; node: NodeRef; tags: string[]; primaryTagId?: ID }
   | { type: 'tag.save'; tag: TagEntry }
   | { type: 'tag.delete'; id: ID }
   | { type: 'tag.merge'; fromId: ID; intoId: ID }
@@ -62,7 +64,8 @@ export interface SendResult { status: 'sent' | 'uncertain' | 'failed'; snapshot?
 export type ContentCommand =
   | { type: 'cw.snapshot' }
   | { type: 'cw.labels'; labels: Record<string,string> }
-  | { type: 'cw.locate'; turnId: ID }
+  | { type: 'cw.locate'; turnId: ID; location?: TurnLocation; requestId?: ID }
+  | { type: 'cw.locate.cancel'; requestId: ID }
   | { type: 'cw.composer' }
   | { type: 'cw.fill'; text: string; mode: 'replace' | 'append' }
   | { type: 'cw.send'; requestId: string; text: string; expectedComposer: string }

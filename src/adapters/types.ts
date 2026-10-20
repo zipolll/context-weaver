@@ -1,4 +1,4 @@
-import type { PageSnapshot, SelectionSnapshot } from '../core/types';
+import type { PageSnapshot, SelectionSnapshot, TurnLocation } from '../core/types';
 import type { PlatformId } from './platforms';
 export interface SiteCapabilities { capture: boolean; navigation: boolean; composer: boolean; selection: boolean; send: boolean }
 export interface NavigationAnchor { turnId: string; text: string; element: HTMLElement }
@@ -10,7 +10,7 @@ export interface SiteAdapter {
   detect(url: string): boolean;
   readSnapshot(): PageSnapshot;
   navigationAnchors(): NavigationAnchor[];
-  locateTurn(turnId: string): boolean;
+  locateTurn(turnId: string, location?: TurnLocation, behavior?: ScrollBehavior): boolean;
   readComposer(): string;
   fillComposer(text: string, mode: 'append' | 'replace'): void;
   composerState(): ComposerState;

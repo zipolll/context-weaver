@@ -1,4 +1,5 @@
-import type { PageSnapshot, SelectionSnapshot, Turn } from '../core/types';
+import type { PageSnapshot, SelectionSnapshot, Turn, TurnLocation } from '../core/types';
+import { findLocatedTurn } from '../core/turnLocation';
 import type { SiteAdapter, ComposerState } from './types';
 import { platformById, platformFor, type PlatformId } from './platforms';
 import { buttonFor, candidates, cleanText, fillInput, fingerprint, locate, normalizeText, readInput, uniqueComposer } from './dom';
@@ -33,7 +34,12 @@ export class StructuredAdapter implements SiteAdapter {
   }
   readSnapshot(): PageSnapshot { const {externalId, turns} = this.read(); const url = new URL(this.url()); return { site: this.id, externalId, url: url.origin + url.pathname, title: conversationTitle(this.document, this.url(), turns[0]!.user.slice(0,60)), sourceTitle: conversationTitle(this.document, this.url(), ''), turns, complete: false }; }
   navigationAnchors() { const {turns,nodes} = this.read(); return turns.map(t => ({ turnId:t.id,text:t.user,element:nodes.get(t.id)! })); }
-  locateTurn(id: string) { try { return locate(this.read().nodes.get(id)); } catch { return false; } }
+  locateTurn(id: string, location?: TurnLocation, behavior?: ScrollBehavior) { try {
+    const { externalId, turns, nodes } = this.read();
+    if (location && (location.site !== this.id || location.externalId !== externalId)) return false;
+    const turn = findLocatedTurn(turns, id, location);
+    return locate(turn ? nodes.get(turn.id) : undefined, behavior);
+  } catch { return false; } }
   private composer() { return uniqueComposer(this.document, this.config.composer); }
   readComposer() { return readInput(this.composer()); }
   fillComposer(text: string, mode: 'append'|'replace') { fillInput(this.composer(),text,mode); }

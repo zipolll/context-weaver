@@ -44,4 +44,15 @@ export function cleanText(node: Element) {
   return normalizeText(copy.textContent ?? '').replace(/\n{3,}/g, '\n\n');
 }
 export function fingerprint(text: string) { let hash = 2166136261; for (const char of text.replace(/\s+/g, ' ').trim()) { hash ^= char.charCodeAt(0); hash = Math.imul(hash, 16777619); } return (hash >>> 0).toString(36); }
-export function locate(node?: HTMLElement) { if (!node) return false; const reduced = node.ownerDocument.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches; node.scrollIntoView?.({ block: 'center', behavior: reduced ? 'auto' : 'smooth' }); const old = node.style.outline; node.style.outline = '2px solid #4563FF'; setTimeout(() => { node.style.outline = old; }, 1400); return true; }
+const highlights = new WeakMap<HTMLElement, { outline: string; timer: ReturnType<typeof setTimeout> }>();
+export function locate(node?: HTMLElement, behavior?: ScrollBehavior) {
+  if (!node?.isConnected) return false;
+  const reduced = node.ownerDocument.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  node.scrollIntoView?.({ block: 'center', behavior: behavior ?? (reduced ? 'auto' : 'smooth') });
+  const previous = highlights.get(node), outline = previous?.outline ?? node.style.outline;
+  if (previous) clearTimeout(previous.timer);
+  node.style.outline = '2px solid #8064D8';
+  const timer = setTimeout(() => { node.style.outline = outline; highlights.delete(node); }, 1400);
+  highlights.set(node, { outline, timer });
+  return true;
+}

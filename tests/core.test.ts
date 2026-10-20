@@ -7,7 +7,7 @@ import { mutateState, readState } from '../src/core/repository';
 import type { AppState, Container, Draft, PageSnapshot, Snippet, SourceSnapshot, Turn } from '../src/core/types';
 
 const turn = (index: number, answer = 'Answer ' + index): Turn => ({ id: 'turn-' + index, user: 'Question ' + index, assistant: answer, index, fingerprint: 'fingerprint-' + index });
-const page = (overrides: Partial<PageSnapshot> = {}): PageSnapshot => ({ site: 'deepseek', externalId: 'conversation-1', url: 'https://chat.deepseek.com/a/chat/s/conversation-1', title: 'Research discussion', turns: [turn(0), turn(1), turn(2)], complete: true, ...overrides });
+const page = (overrides: Partial<PageSnapshot> = {}): PageSnapshot => ({ site: 'deepseek', externalId: 'conversation-1', url: 'https://chat.deepseek.com/a/chat/s/' + (overrides.externalId || 'conversation-1'), title: 'Research discussion', turns: [turn(0), turn(1), turn(2)], complete: true, ...overrides });
 const container = (id: string, parentId: string | null = null): Container => ({ id, kind: parentId ? 'folder' : 'project', name: id, parentId, order: 0, createdAt: 1 });
 const source = (conversationId: string | null = null): SourceSnapshot => ({ id: 'source-1', conversationId, title: 'Source', url: 'https://example.com/source', turnIds: [], text: 'Frozen source text', capturedAt: 1 });
 const draft = (overrides: Partial<Draft> = {}): Draft => ({ id: 'draft-1', sources: [source()], question: 'why?', action: 'followup', templateId: 'followup', prompt: 'assembled prompt\nsecond line', destination: 'new', status: 'filled', createdAt: 1, ...overrides });

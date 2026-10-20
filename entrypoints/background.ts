@@ -1,13 +1,18 @@
 import { openPage } from '../src/core/navigation';
 import { defineBackground } from 'wxt/utils/define-background';
-import { CHANNEL, type ActivePage, type ApiSettings, type AppCommand, type ContentCommand, type Draft, type PageSnapshot, type Reply, type SelectionSnapshot, type UiIntent, type SendResult, type AppState } from '../src/core/types';
+import { CHANNEL, type ActivePage, type ApiSettings, type AppCommand, type ContentCommand, type Draft, type PageSnapshot, type Reply, type SelectionSnapshot, type UiIntent, type SendResult, type AppState, type TurnLocation } from '../src/core/types';
 import { mutateState, readState } from '../src/core/repository';
 import { applyCommand, bindDraft, captureSnapshot, exportBackup, safeUrl, updateCaptured } from '../src/core/state';
 import { uid } from '../src/core/context';
 import { normalizePrompt, questionFromDraft } from '../src/core/questions';
-import { platformFor, platformById, type PlatformId } from '../src/adapters/platforms';
+import { conversationIdentity, platformConversation, platformFor, platformById, type PlatformId } from '../src/adapters/platforms';
+import { createTurnLocation, navigationFailure } from '../src/core/turnLocation';
+import type { TurnNavigationStatus } from '../src/core/types';
+import { matchTurnHistory } from '../src/core/history';
+import { selectionSource } from '../src/core/sources';
 export default defineBackground(()=>{
   const inflight=new Set<string>();
+  const locating = new Map<number,string>();
   let intentClaim: Promise<unknown> = Promise.resolve();
   const notify=()=>chrome.runtime.sendMessage({channel:CHANNEL,changed:true}).catch(()=>undefined);
   const trustedPage=(sender:chrome.runtime.MessageSender)=>sender.id===chrome.runtime.id&&sender.url?.startsWith(chrome.runtime.getURL(''));
@@ -23,11 +28,37 @@ export default defineBackground(()=>{
     let reply:Reply<T>;try{reply=await chrome.tabs.sendMessage(tabId,{channel:CHANNEL,command});}catch{throw new Error('页面连接中断，请刷新目标网页后重试。');}
     if(!reply?.ok)throw new Error(reply&&!reply.ok?reply.error:'页面没有响应。');return reply.data;
   }
+  function locationFor(state: AppState, url: string, turnId: string) {
+    const identity = platformConversation(url), key = identity && JSON.stringify([identity.site, identity.externalId]);
+    const saved = state.conversations.find(c => key ? conversationIdentity(c) === key : c.url === url);
+    return saved ? createTurnLocation(saved, turnId) : undefined;
+  }
+  async function locatePage(tabId: number, turnId: string, location?: TurnLocation): Promise<Exclude<TurnNavigationStatus,'pending'>|'superseded'> {
+    const requestId = uid(), deadline = Date.now() + 10000; locating.set(tabId, requestId);
+    try {
+      while (Date.now() < deadline) {
+        if (locating.get(tabId) !== requestId) return 'superseded';
+        try {
+          const result=await content<TurnNavigationStatus|boolean>(tabId,{type:'cw.locate',turnId,location,requestId});
+          if(locating.get(tabId)!==requestId)return 'superseded';
+          // Accept booleans from an older content script until the page is refreshed.
+          if(result===true||result==='found')return 'found';
+          if(result==='ambiguous'||result==='missing'||result==='wrong-page')return result;
+        } catch {}
+        await new Promise(resolve => setTimeout(resolve, 400));
+      }
+      return 'missing';
+    } finally {
+      if (locating.get(tabId) === requestId) locating.delete(tabId);
+      try { await content(tabId,{type:'cw.locate.cancel',requestId}); } catch {}
+    }
+  }
   async function active():Promise<ActivePage>{const t=await targetTab();if(t.id===undefined||!t.url)throw new Error('无法读取当前页面。');const site=platformFor(t.url)?.id;const page:ActivePage={tabId:t.id,url:t.url,title:t.title??'未命名页面',supported:!!site,site};if(site){try{page.snapshot=await content(t.id,{type:'cw.snapshot'});}catch{}try{page.selection=await content(t.id,{type:'cw.selection'});}catch{}}return page;}
   function decorate(s:AppState,snapshot:PageSnapshot,tabId?:number){
-    const saved=s.conversations.find(c=>c.site===snapshot.site&&c.externalId===snapshot.externalId);
+    const saved=s.conversations.find(c=>conversationIdentity(c)===conversationIdentity(snapshot));
+    const matches=matchTurnHistory(saved?.turns??[],snapshot.turns);
     const turns=snapshot.turns.map((t,index)=>{
-      const stored=saved?.turns.find(x=>x.id===t.id)?.question;
+      const stored=matches.get(t.id)?.question;
       const draft=s.drafts.find(d=> d.targetSite===snapshot.site && ['submitting','sent','bound','uncertain','filled'].includes(d.status) && normalizePrompt(d.prompt)===normalizePrompt(t.user) && ((d.targetExternalId===snapshot.externalId&&d.sentTurnId===t.id)||(d.tabId===tabId&&d.destination==='new'&&index===0)));
       const question=draft?questionFromDraft(draft):stored;return question?{...t,question}:t;
     });
@@ -76,7 +107,7 @@ export default defineBackground(()=>{
   async function recover(){return mutateState(s=>{for(const d of s.drafts)if(!inflight.has(d.id)&&['waiting','submitting'].includes(d.status)){d.status=d.status==='submitting'?'uncertain':'preview';d.error=d.status==='uncertain'?'发送过程已中断，请检查原页面。不会自动重新发送。':undefined;}return s;});}
   async function install(){
     await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});await chrome.storage.session.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});await chrome.sidePanel.setPanelBehavior({openPanelOnActionClick:true});await recover();
-    await chrome.contextMenus.removeAll();for(const [id,title]of [['current','拾序：在当前对话追问'],['new','拾序：在新对话追问'],['stage','拾序：添加到暂存'],['explain','拾序：解释所选内容'],['example','拾序：举例说明'],['check','拾序：检查所选内容']])chrome.contextMenus.create({id:'cw-'+id,title:title!,contexts:['selection']});
+    await chrome.contextMenus.removeAll();for(const [id,title]of [['current','UniFAI：在当前对话追问'],['new','UniFAI：在新对话追问'],['stage','UniFAI：添加到暂存'],['explain','UniFAI：解释所选内容'],['example','UniFAI：举例说明'],['check','UniFAI：检查所选内容']])chrome.contextMenus.create({id:'cw-'+id,title:title!,contexts:['selection']});
   }
   chrome.runtime.onInstalled.addListener(()=>void install());chrome.runtime.onStartup.addListener(()=>void install());
   chrome.tabs.onActivated.addListener(({tabId})=>{chrome.tabs.get(tabId).then(t=>{if(t.url?.startsWith('http'))return chrome.storage.session.set({lastWebTab:tabId});}).then(notify).catch(()=>undefined);});
@@ -85,7 +116,7 @@ export default defineBackground(()=>{
     void(async()=>{let selection:SelectionSnapshot={text:info.selectionText??'',title:tab.title??'选中片段',url:info.pageUrl??tab.url??''};if(platformFor(selection.url))try{const captured=await content<SelectionSnapshot>(tabId,{type:'cw.selection'});if(captured.text.trim()===selection.text.trim())selection=captured;}catch{}
       safeUrl(selection.url);if(platformFor(selection.url))try{const snapshot=await content<PageSnapshot>(tabId,{type:"cw.snapshot"});await mutateState(s=>captureSnapshot(s,decorate(s,snapshot,tabId)).state);}catch{}
       if(key==='stage'||key==='snippet'){
-        await mutateState(s=>applyCommand(s,{type:'stage.save',item:{id:uid(),source:{id:uid(),conversationId:s.conversations.find(c=>c.url===selection.url)?.id??null,title:selection.title,url:selection.url,turnIds:selection.turnId?[selection.turnId]:[],text:selection.text,capturedAt:Date.now()},selected:true,createdAt:Date.now()}}));
+        await mutateState(s=>applyCommand(s,{type:'stage.save',item:{id:uid(),source:selectionSource(s,selection),selected:true,createdAt:Date.now()}}));
         await chrome.storage.session.set({lastWebTab:tabId});notify();return;
       }
       const intent:UiIntent={action:['explain','example','check'].includes(key)?key as UiIntent['action']:'followup',destination:key!=='new'&&!!platformFor(selection.url)?'current':'new',selection,tabId,nonce:uid()};await chrome.storage.session.set({intent,lastWebTab:tabId});notify();})().catch(()=>undefined);
@@ -94,12 +125,13 @@ export default defineBackground(()=>{
     case 'state.get':return recover();
     case 'page.active':return active();
     case 'page.composer':{const tab=await targetTab(command.tabId);return content(tab.id!,{type:'cw.composer'});}
-    case 'page.locate':{const tab=await targetTab(command.tabId);if(!await content(tab.id!,{type:'cw.locate',turnId:command.turnId}))throw new Error('该问题尚未加载，请先在原页面加载历史。');return true;}
+    case 'page.locate':{const tab=await targetTab(command.tabId), state=await readState();const result=await locatePage(tab.id!,command.turnId,locationFor(state,tab.url??'',command.turnId));if(result!=='found'&&result!=='superseded')throw new Error(navigationFailure(result));return true;}
     case 'page.open': {
       const current=await readState(); const blocked=current.drafts.filter(d=>inflight.has(d.id)&&d.tabId!==undefined).map(d=>d.tabId!);
       let anchor:number|undefined;try{anchor=(await targetTab()).id;}catch{}
       const result=await openPage(safeUrl(command.url),command.mode??current.openMode??'split',anchor,blocked);
-      if(command.turnId&&result.tab.id!==undefined){let found=false;for(let i=0;i<25;i++){try{if(await content(result.tab.id,{type:'cw.locate',turnId:command.turnId})){found=true;break;}}catch{}await new Promise(resolve=>setTimeout(resolve,400));}if(!found)result.notice='已打开对话；该问题尚未加载，请先在原页面加载历史，再双击问题定位。';}
+      if(!command.turnId&&result.tab.id!==undefined)locating.delete(result.tab.id);
+      if(command.turnId&&result.tab.id!==undefined){const found=await locatePage(result.tab.id,command.turnId,locationFor(current,command.url,command.turnId));if(found!=='found'&&found!=='superseded'){result.notice='已打开对话。'+navigationFailure(found);result.noticeLevel='warning';}}
       return result;
     }
     case 'platform.last':return (await chrome.storage.local.get('lastPlatform')).lastPlatform??'deepseek';

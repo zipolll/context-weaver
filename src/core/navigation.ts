@@ -1,11 +1,12 @@
 import type { OpenMode } from './types';
+import { platformConversation } from '../adapters/platforms';
 
 type SplitTab = chrome.tabs.Tab & { splitViewId?: number };
 type SplitTabs = typeof chrome.tabs & {
   createSplit?: (tabIds: [number, number]) => Promise<number>;
   create: (properties: chrome.tabs.CreateProperties & { splitWithTabId?: number }) => Promise<SplitTab>;
 };
-export interface OpenedPage { tab: chrome.tabs.Tab; notice?: string }
+export interface OpenedPage { tab: chrome.tabs.Tab; notice?: string; noticeLevel?: 'info' | 'warning' }
 
 // Serialize opens so rapid double clicks cannot create competing right panes.
 let queue: Promise<unknown> = Promise.resolve();
@@ -23,7 +24,8 @@ export function openPage(url: string, mode: OpenMode, anchorId?: number, blocked
       // Chrome's adjacent tab order is the left/right order. Reuse the right tab.
       const right = peers[1]!;
       if (url !== 'about:blank') {
-        const matching = peers.find(t => t.url === url);
+        const identity = platformConversation(url);
+        const matching = peers.find(t => t.url === url || identity && JSON.stringify(platformConversation(t.url ?? '')) === JSON.stringify(identity));
         if (matching?.id !== undefined) { const tab = await tabs.update(matching.id, { active: true }); return { tab: tab! }; }
       }
       if (blockedIds.includes(right.id!)) throw new Error('右侧分栏正在发送，请等待完成后再打开节点。');
